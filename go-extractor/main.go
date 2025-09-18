@@ -59,6 +59,23 @@ var (
 		"clusteroperator.List":  "config.openshift.io/v1/ClusterOperator",
 	}
 
+	// eco-goinfra operation patterns
+	ecoGoinfraOperations = map[string]string{
+		"deleteres.Namespace":  "v1/Namespace",
+		"deleteres.Pod":        "v1/Pod",
+		"deleteres.Deployment": "apps/v1/Deployment",
+		"deleteres.Service":    "v1/Service",
+		"deleteres.Route":      "route.openshift.io/v1/Route",
+		"nodes.List":           "v1/Node",
+		"pod.List":             "v1/Pod",
+		"deployment.List":      "apps/v1/Deployment",
+		"service.List":         "v1/Service",
+		"route.List":           "route.openshift.io/v1/Route",
+		"namespace.List":       "v1/Namespace",
+		"clusterversion.Pull":  "config.openshift.io/v1/ClusterVersion",
+		"clusteroperator.List": "config.openshift.io/v1/ClusterOperator",
+	}
+
 	// Kubernetes API type patterns
 	k8sTypePatterns = map[string]string{
 		"corev1.":       "v1/",
@@ -191,6 +208,22 @@ func detectEcoGoinfraPattern(call *ast.CallExpr) (gvk string, verb string) {
 		callName := fmt.Sprintf("%s.%s", ident.Name, sel.Sel.Name)
 		if gvk, exists := ecoGoinfraBuilders[callName]; exists {
 			return gvk, ""
+		}
+	}
+
+	// Check for eco-goinfra operation patterns like deleteres.Namespace(), nodes.List()
+	if ident, ok := sel.X.(*ast.Ident); ok {
+		callName := fmt.Sprintf("%s.%s", ident.Name, sel.Sel.Name)
+		if gvk, exists := ecoGoinfraOperations[callName]; exists {
+			// Determine verb based on the operation
+			if strings.HasPrefix(ident.Name, "deleteres") {
+				return gvk, "delete"
+			} else if sel.Sel.Name == "List" {
+				return gvk, "list"
+			} else if sel.Sel.Name == "Pull" {
+				return gvk, "get"
+			}
+			return gvk, "unknown"
 		}
 	}
 

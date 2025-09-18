@@ -21,9 +21,20 @@ def load_specs(path: str) -> List[Dict[str, Any]]:
     return specs
 
 def spec_to_text(spec: Dict[str, Any]) -> str:
-    parts = [spec.get('test_id','')]
-    parts += spec.get('preconditions', [])
-    for a in spec.get('actions', []):
+    # Don't include test_id in the content - it's used as document ID
+    parts = []
+    
+    # Handle None values by converting to empty lists
+    preconditions = spec.get('preconditions') or []
+    actions = spec.get('actions') or []
+    expectations = spec.get('expectations') or []
+    externals = spec.get('externals') or []
+    openshift_specific = spec.get('openshift_specific') or []
+    concurrency = spec.get('concurrency') or []
+    artifacts = spec.get('artifacts') or []
+    
+    parts += preconditions
+    for a in actions:
         gvk = a.get('gvk','')
         kind_hint = (a.get('fields') or {}).get('kind_hint','')
         verb = a.get('verb','')
@@ -35,11 +46,11 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
             parts.append(gvk)
         elif verb:
             parts.append(f"verb:{verb}")
-    parts += [f"expect:{e.get('target','')}={e.get('condition','')}" for e in spec.get('expectations', [])]
-    parts += [f"ext:{x}" for x in spec.get('externals', [])]
-    parts += spec.get('openshift_specific', [])
-    parts += spec.get('concurrency', [])
-    parts += spec.get('artifacts', [])
+    parts += [f"expect:{e.get('target','')}={e.get('condition','')}" for e in expectations]
+    parts += [f"ext:{x}" for x in externals]
+    parts += openshift_specific
+    parts += concurrency
+    parts += artifacts
     return '\n'.join(map(str, parts))
 
 def expand_equivalents(tokens: set) -> set:
@@ -59,7 +70,8 @@ def build_embeddings(specs: List[Dict[str,Any]], model) -> np.ndarray:
 
 def tokens_from_spec(s: Dict[str,Any]) -> set:
     toks = set()
-    for act in s.get('actions', []):
+    actions = s.get('actions') or []
+    for act in actions:
         gvk = act.get('gvk','')
         kind_hint = (act.get('fields') or {}).get('kind_hint','')
         verb = act.get('verb','')
@@ -101,7 +113,8 @@ def coverage_matrix(specs, repo_label):
     from collections import Counter
     cv = Counter()
     for s in specs:
-        for a in s.get('actions', []):
+        actions = s.get('actions') or []
+        for a in actions:
             gvk = a.get('gvk','')
             kind_hint = (a.get('fields') or {}).get('kind_hint','')
             verb = a.get('verb','')
