@@ -1,59 +1,188 @@
+#!/usr/bin/env python3
+
 # py-extractor/extract_kubespec.py
 import argparse, ast, json, os, re
 from pathlib import Path
 
-VERB_PREFIXES = ('create_', 'patch_', 'delete_', 'read_', 'list_', 'replace_', 'watch_')
+VERB_PREFIXES = ("create_", "patch_", "delete_", "read_", "list_", "replace_", "watch_")
 CLI_RE = re.compile(r"\b(oc|kubectl)\b")
-GOLDEN_RE = re.compile(r"(?i)testdata/[^\\"']+")
+GOLDEN_RE = re.compile(r"(?i)testdata/[^\"']+")
 
 PSA_KEYS = [
-    'pod-security.kubernetes.io/enforce',
-    'pod-security.kubernetes.io/audit',
-    'pod-security.kubernetes.io/warn',
+    "pod-security.kubernetes.io/enforce",
+    "pod-security.kubernetes.io/audit",
+    "pod-security.kubernetes.io/warn",
 ]
 SCC_CLI_PATTERNS = [
-    'oc adm policy add-scc-to-user',
-    'oc adm policy add-scc-to-group',
+    "oc adm policy add-scc-to-user",
+    "oc adm policy add-scc-to-group",
 ]
 
+
+def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
+    """Extract meaningful expectation information from assert statements"""
+    if not assert_node.test:
+        return None
+    
+    # Helper function to safely convert AST nodes to strings
+    def ast_to_string(node):
+        if hasattr(ast, 'unparse'):
+            return ast.unparse(node)
+        else:
+            return str(node)
+    
+    # Helper function to convert comparison operators to strings
+    def op_to_string(op):
+        op_map = {
+            ast.Eq: "==",
+            ast.NotEq: "!=",
+            ast.Lt: "<",
+            ast.LtE: "<=",
+            ast.Gt: ">",
+            ast.GtE: ">=",
+            ast.Is: "is",
+            ast.IsNot: "is not",
+            ast.In: "in",
+            ast.NotIn: "not in"
+        }
+        return op_map.get(type(op), str(op))
+    
+    # Handle comparison operations (==, !=, <, >, etc.)
+    if isinstance(assert_node.test, ast.Compare):
+        left = ast_to_string(assert_node.test.left)
+        ops = [op_to_string(op) for op in assert_node.test.ops]
+        comparators = [ast_to_string(comp) for comp in assert_node.test.comparators]
+        
+        if len(ops) == 1 and len(comparators) == 1:
+            condition = f"{left} {ops[0]} {comparators[0]}"
+            # Standardized target classification for similarity search compatibility
+            target = "test_condition"  # Default to match Go extractor
+            if "len(" in left and any(resource in left.lower() for resource in ["baremetalhost", "clusterdeployment", "namespace", "pod", "service"]):
+                target = "resource_count"
+            elif "online" in left.lower() or "status" in left.lower():
+                target = "resource_status"
+            elif "deleted" in left.lower() or "not in" in condition or "empty" in condition.lower():
+                target = "resource_deletion"
+            elif "version" in left.lower() or "image" in left.lower():
+                target = "resource_version"
+            
+            return {"target": target, "condition": condition}
+    
+    # Handle membership tests (in, not in)
+    elif isinstance(assert_node.test, ast.Compare) and len(assert_node.test.ops) == 1:
+        op = assert_node.test.ops[0]
+        if isinstance(op, (ast.In, ast.NotIn)):
+            left = ast_to_string(assert_node.test.left)
+            right = ast_to_string(assert_node.test.comparators[0])
+            condition = f"{left} {'not in' if isinstance(op, ast.NotIn) else 'in'} {right}"
+            return {"target": "resource_deletion" if isinstance(op, ast.NotIn) else "test_condition", "condition": condition}
+    
+    # Handle boolean operations (and, or)
+    elif isinstance(assert_node.test, ast.BoolOp):
+        op = "and" if isinstance(assert_node.test.op, ast.And) else "or"
+        values = [ast_to_string(v) for v in assert_node.test.values]
+        condition = f" {op} ".join(values)
+        return {"target": "compound_condition", "condition": condition}
+    
+    # Generic assertion
+    condition = ast_to_string(assert_node.test)
+    return {"target": "test_condition", "condition": condition}
+
+
 class TestVisitor(ast.NodeVisitor):
-    def __init__(self, path):
+    def __init__(self, path, root_path):
         self.path = path
+        self.root_path = root_path
         self.specs = []
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
-        if not node.name.startswith('test'):
+        if not node.name.startswith("test"):
             return
+        # Create test_id with basename substitution
+        basename = os.path.basename(self.root_path)
+        relative_path = os.path.relpath(self.path, self.root_path)
         spec = {
-            'test_id': f"{self.path}:{node.name}",
-            'level': 'unknown',
-            'preconditions': [],
-            'actions': [],
-            'expectations': [],
-            'externals': [],
-            'openshift_specific': [],
-            'concurrency': [],
-            'artifacts': [],
+            "test_id": f"{basename}/{relative_path}:{node.name}",
+            "level": "unknown",
+            "preconditions": [],
+            "actions": [],
+            "expectations": [],
+            "openshift_specific": [],
+            "concurrency": [],
+            "artifacts": [],
         }
         for dec in node.decorator_list:
-            if isinstance(dec, ast.Call) and getattr(dec.func, 'attr', '') == 'parametrize':
-                spec['preconditions'].append('parametrized')
+            if (
+                isinstance(dec, ast.Call)
+                and getattr(dec.func, "attr", "") == "parametrize"
+            ):
+                spec["preconditions"].append("parametrized")
         for n in ast.walk(node):
             if isinstance(n, ast.Call):
                 func = n.func
-                if isinstance(func, ast.Attribute):
-                    mname = func.attr or ''
+                
+                # Check for direct helper function calls (e.g., get_resource, get_resource_from_namespace)
+                if isinstance(func, ast.Name) and func.id in [
+                    "get_resource",
+                    "get_resource_from_namespace",
+                ]:
+                    if n.args and isinstance(n.args[0], ast.Constant):
+                        resource_name = n.args[0].value
+                        gvk = map_resource_name_to_gvk(resource_name)
+                        if gvk:
+                            spec["actions"].append({"gvk": gvk, "verb": "get"})
+                    elif n.args:
+                        # For any arguments (including variables), add a generic action
+                        spec["actions"].append(
+                            {"gvk": "unknown/unknown", "verb": "get"}
+                        )
+                
+                # Check for attribute-based calls
+                elif isinstance(func, ast.Attribute):
+                    mname = func.attr or ""
                     low = mname.lower()
                     if low.startswith(VERB_PREFIXES):
-                        verb = low.split('_', 1)[0]
-                        kind = low.split('_')[-1]
-                        spec['actions'].append({
-                            'gvk': guess_gvk_from_attr(func),
-                            'verb': verb.replace('read', 'get'),
-                            'fields': {'kind_hint': kind.capitalize()},
-                        })
-                if isinstance(func, ast.Attribute) and func.attr in {'run','check_call','check_output'}:
-                    if getattr(func.value, 'id', '') == 'subprocess':
+                        verb = low.split("_", 1)[0]
+                        kind = low.split("_")[-1]
+                        spec["actions"].append(
+                            {
+                                "gvk": guess_gvk_from_attr(func),
+                                "verb": verb.replace("read", "get"),
+                                "fields": {"kind_hint": kind.capitalize()},
+                            }
+                        )
+
+                    # Check for openshift library patterns
+                    if isinstance(func.value, ast.Name) and func.value.id == "oc":
+                        if mname in ["selector"]:
+                            # oc.selector(resource_name) - this is a get/list operation
+                            if n.args and isinstance(n.args[0], ast.Constant):
+                                resource_name = n.args[0].value
+                                gvk = map_resource_name_to_gvk(resource_name)
+                                if gvk:
+                                    spec["actions"].append({"gvk": gvk, "verb": "get"})
+
+                    # Check for imported helper function calls (e.g., from oc_helpers import get_resource)
+                    if func.attr in [
+                        "get_resource",
+                        "get_resource_from_namespace",
+                    ]:
+                        if n.args and isinstance(n.args[0], ast.Constant):
+                            resource_name = n.args[0].value
+                            gvk = map_resource_name_to_gvk(resource_name)
+                            if gvk:
+                                spec["actions"].append({"gvk": gvk, "verb": "get"})
+                        elif n.args:
+                            # For any arguments (including variables), add a generic action
+                            spec["actions"].append(
+                                {"gvk": "unknown/unknown", "verb": "get"}
+                            )
+                if isinstance(func, ast.Attribute) and func.attr in {
+                    "run",
+                    "check_call",
+                    "check_output",
+                }:
+                    if getattr(func.value, "id", "") == "subprocess":
                         args = []
                         for a in n.args:
                             if isinstance(a, ast.List):
@@ -62,93 +191,254 @@ class TestVisitor(ast.NodeVisitor):
                                         args.append(str(el.value))
                             elif isinstance(a, ast.Constant):
                                 args.append(str(a.value))
-                        cmd = ' '.join(args)
+                        cmd = " ".join(args)
                         if CLI_RE.search(cmd):
-                            spec['externals'].append(cmd)
+                            # Map CLI command to equivalent API operation
                             low = cmd.lower()
-                            if ' oc ' in (' '+low+' ') and ' create ' in low and ' route ' in low:
-                                spec['actions'].append({'gvk': 'route.openshift.io/v1/Route', 'verb': 'create'})
-                            if ((' kubectl ' in (' '+low+' ')) or (' oc ' in (' '+low+' '))) and ' create ' in low and ' ingress ' in low:
-                                spec['actions'].append({'gvk': 'networking.k8s.io/v1/Ingress', 'verb': 'create'})
-                            if (' label ' in low and ' ns ' in low) and any(k in low for k in PSA_KEYS):
+                            gvk, verb = map_command_to_api(cmd, low)
+                            if gvk and verb:
+                                spec["actions"].append({"gvk": gvk, "verb": verb})
+
+                            # Handle PSA labels
+                            if (" label " in low and " ns " in low) and any(
+                                k in low for k in PSA_KEYS
+                            ):
                                 for k in PSA_KEYS:
                                     if k in low:
-                                        m = re.search(k + r'=([^\s]+)', low)
+                                        m = re.search(k + r"=([^\s]+)", low)
                                         if m:
-                                            spec['preconditions'].append(f"psa:{k}={m.group(1)}")
-                            if any(p in low for p in [s.lower() for s in SCC_CLI_PATTERNS]):
-                                spec['preconditions'].append('equiv:scc~psa')
-                if isinstance(func, ast.Attribute) and func.attr == 'raises':
-                    if getattr(func.value, 'id', '') == 'pytest':
-                        spec['expectations'].append({'target': 'exception', 'condition': 'raises'})
+                                            spec["preconditions"].append(
+                                                f"psa:{k}={m.group(1)}"
+                                            )
+                            if any(
+                                p in low for p in [s.lower() for s in SCC_CLI_PATTERNS]
+                            ):
+                                spec["preconditions"].append("equiv:scc~psa")
+                            if isinstance(func, ast.Attribute) and func.attr == "raises":
+                                if getattr(func.value, "id", "") == "pytest":
+                                    spec["expectations"].append(
+                                        {"target": "exception", "condition": "raises"}
+                                    )
             if isinstance(n, ast.Constant) and isinstance(n.value, str):
                 m = GOLDEN_RE.search(n.value)
                 if m:
-                    spec['artifacts'].append(m.group(0))
+                    spec["artifacts"].append(m.group(0))
+            
+            # Check for assert statements (expectations)
+            if isinstance(n, ast.Assert):
+                expectation = extract_assertion_expectation(n)
+                if expectation:
+                    spec["expectations"].append(expectation)
         for n in ast.walk(node):
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
-                low = (n.func.attr or '').lower()
-                if 'ingress' in low:
-                    verb = low.split('_', 1)[0]
-                    spec['actions'].append({'gvk': 'networking.k8s.io/v1/Ingress', 'verb': verb.replace('read','get')})
+                low = (n.func.attr or "").lower()
+                if "ingress" in low:
+                    verb = low.split("_", 1)[0]
+                    spec["actions"].append(
+                        {
+                            "gvk": "networking.k8s.io/v1/Ingress",
+                            "verb": verb.replace("read", "get"),
+                        }
+                    )
 
-        if any(a.get('verb') in {'create','delete','patch','replace','watch'} for a in spec['actions']):
-            spec['level'] = 'integration'
+        if any(
+            a.get("verb") in {"create", "delete", "patch", "replace", "watch"}
+            for a in spec["actions"]
+        ):
+            spec["level"] = "integration"
 
         bridges = set()
-        for a in spec['actions']:
-            g = (a.get('gvk') or '').lower()
-            if 'route.openshift.io' in g and '/route' in g: bridges.add('equiv:route~ingress')
-            if 'networking.k8s.io' in g and '/ingress' in g: bridges.add('equiv:route~ingress')
-            if 'security.openshift.io' in g: bridges.add('equiv:scc~psa')
-        for p in spec['preconditions']:
-            if p.startswith('psa:'): bridges.add('equiv:scc~psa')
+        for a in spec["actions"]:
+            g = (a.get("gvk") or "").lower()
+            if "route.openshift.io" in g and "/route" in g:
+                bridges.add("equiv:route~ingress")
+            if "networking.k8s.io" in g and "/ingress" in g:
+                bridges.add("equiv:route~ingress")
+            if "security.openshift.io" in g:
+                bridges.add("equiv:scc~psa")
+        for p in spec["preconditions"]:
+            if p.startswith("psa:"):
+                bridges.add("equiv:scc~psa")
         for b in sorted(bridges):
-            spec['preconditions'].append(b)
+            spec["preconditions"].append(b)
 
         self.specs.append(spec)
+
 
 def guess_gvk_from_attr(attr: ast.Attribute) -> str:
     root = attr
     while isinstance(root, ast.Attribute):
-        if isinstance(root.value, ast.Call) and isinstance(root.value.func, ast.Attribute):
+        if isinstance(root.value, ast.Call) and isinstance(
+            root.value.func, ast.Attribute
+        ):
             api = root.value.func.attr
             group, version = api_to_group_version(api)
             if group or version:
                 return f"{group+'/'+version if group else version}"
-        root = root.value if isinstance(root.value, ast.Attribute) else getattr(root, 'value', None)
+        root = (
+            root.value
+            if isinstance(root.value, ast.Attribute)
+            else getattr(root, "value", None)
+        )
         if root is None:
             break
-    return ''
+    return ""
+
+
+def map_resource_name_to_gvk(resource_name: str) -> str:
+    """Map Kubernetes resource name to GVK"""
+    resource_name = resource_name.lower()
+
+    # Common resource mappings
+    resource_map = {
+        "pods": "v1/Pod",
+        "pod": "v1/Pod",
+        "services": "v1/Service",
+        "service": "v1/Service",
+        "deployments": "apps/v1/Deployment",
+        "deployment": "apps/v1/Deployment",
+        "namespaces": "v1/Namespace",
+        "namespace": "v1/Namespace",
+        "configmaps": "v1/ConfigMap",
+        "configmap": "v1/ConfigMap",
+        "secrets": "v1/Secret",
+        "secret": "v1/Secret",
+        "routes": "route.openshift.io/v1/Route",
+        "route": "route.openshift.io/v1/Route",
+        "ingresses": "networking.k8s.io/v1/Ingress",
+        "ingress": "networking.k8s.io/v1/Ingress",
+        "baremetalhosts": "metal3.io/v1alpha1/BareMetalHost",
+        "baremetalhost": "metal3.io/v1alpha1/BareMetalHost",
+        "clusterdeployments": "hive.openshift.io/v1/ClusterDeployment",
+        "clusterdeployment": "hive.openshift.io/v1/ClusterDeployment",
+        "agentclusterinstalls": "extensions.hive.openshift.io/v1beta1/AgentClusterInstall",
+        "agentclusterinstall": "extensions.hive.openshift.io/v1beta1/AgentClusterInstall",
+    }
+
+    return resource_map.get(resource_name, "")
+
+
+def map_command_to_api(cmd: str, low: str) -> tuple[str, str]:
+    """Map CLI command to equivalent API operation (GVK, verb)"""
+
+    # kubectl/oc create patterns
+    if " create " in low:
+        if " pod " in low or " pods " in low:
+            return "v1/Pod", "create"
+        if " service " in low or " svc " in low:
+            return "v1/Service", "create"
+        if " deployment " in low or " deploy " in low:
+            return "apps/v1/Deployment", "create"
+        if " route " in low:
+            return "route.openshift.io/v1/Route", "create"
+        if " namespace " in low or " ns " in low:
+            return "v1/Namespace", "create"
+        if " configmap " in low:
+            return "v1/ConfigMap", "create"
+        if " secret " in low:
+            return "v1/Secret", "create"
+        if " ingress " in low:
+            return "networking.k8s.io/v1/Ingress", "create"
+
+    # kubectl/oc get patterns
+    if " get " in low:
+        if " pod " in low or " pods " in low:
+            return "v1/Pod", "get"
+        if " service " in low or " svc " in low:
+            return "v1/Service", "get"
+        if " deployment " in low or " deploy " in low:
+            return "apps/v1/Deployment", "get"
+        if " route " in low:
+            return "route.openshift.io/v1/Route", "get"
+        if " namespace " in low or " ns " in low:
+            return "v1/Namespace", "get"
+        if " configmap " in low:
+            return "v1/ConfigMap", "get"
+        if " secret " in low:
+            return "v1/Secret", "get"
+        if " ingress " in low:
+            return "networking.k8s.io/v1/Ingress", "get"
+
+    # kubectl/oc delete patterns
+    if " delete " in low:
+        if " pod " in low or " pods " in low:
+            return "v1/Pod", "delete"
+        if " service " in low or " svc " in low:
+            return "v1/Service", "delete"
+        if " deployment " in low or " deploy " in low:
+            return "apps/v1/Deployment", "delete"
+        if " route " in low:
+            return "route.openshift.io/v1/Route", "delete"
+        if " namespace " in low or " ns " in low:
+            return "v1/Namespace", "delete"
+        if " configmap " in low:
+            return "v1/ConfigMap", "delete"
+        if " secret " in low:
+            return "v1/Secret", "delete"
+        if " ingress " in low:
+            return "networking.k8s.io/v1/Ingress", "delete"
+
+    # kubectl/oc patch patterns
+    if " patch " in low:
+        if " pod " in low or " pods " in low:
+            return "v1/Pod", "patch"
+        if " service " in low or " svc " in low:
+            return "v1/Service", "patch"
+        if " deployment " in low or " deploy " in low:
+            return "apps/v1/Deployment", "patch"
+        if " route " in low:
+            return "route.openshift.io/v1/Route", "patch"
+        if " namespace " in low or " ns " in low:
+            return "v1/Namespace", "patch"
+        if " configmap " in low:
+            return "v1/ConfigMap", "patch"
+        if " secret " in low:
+            return "v1/Secret", "patch"
+        if " ingress " in low:
+            return "networking.k8s.io/v1/Ingress", "patch"
+
+    # kubectl/oc apply patterns
+    if " apply " in low:
+        return "unknown/unknown", "apply"
+
+    return "", ""
+
 
 def api_to_group_version(api: str):
-    m = (api or '').lower()
-    if 'appsv1' in m: return ('apps','v1')
-    if m == 'corev1api' or m == 'v1api' or 'corev1' in m: return ('','v1')
-    if 'batchv1' in m: return ('batch','v1')
-    if 'rbacauthorizationv1' in m or 'rbacv1' in m: return ('rbac.authorization.k8s.io','v1')
-    if 'networkingv1' in m: return ('networking.k8s.io','v1')
-    return ('','')
+    m = (api or "").lower()
+    if "appsv1" in m:
+        return ("apps", "v1")
+    if m == "corev1api" or m == "v1api" or "corev1" in m:
+        return ("", "v1")
+    if "batchv1" in m:
+        return ("batch", "v1")
+    if "rbacauthorizationv1" in m or "rbacv1" in m:
+        return ("rbac.authorization.k8s.io", "v1")
+    if "networkingv1" in m:
+        return ("networking.k8s.io", "v1")
+    return ("", "")
+
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--root', required=True)
+    ap.add_argument("--root", required=True)
     args = ap.parse_args()
 
     for root, _, files in os.walk(args.root):
         for fn in files:
-            if not (fn.startswith('test_') and fn.endswith('.py')):
+            if not (fn.startswith("test_") and fn.endswith(".py")):
                 continue
             path = os.path.join(root, fn)
             try:
-                src = Path(path).read_text(encoding='utf-8')
+                src = Path(path).read_text(encoding="utf-8")
                 tree = ast.parse(src, filename=path)
-                v = TestVisitor(path)
+                v = TestVisitor(path, args.root)
                 v.visit(tree)
                 for spec in v.specs:
                     print(json.dumps(spec, ensure_ascii=False))
             except Exception:
                 continue
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

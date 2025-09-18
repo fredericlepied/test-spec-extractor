@@ -240,49 +240,158 @@ func isGinkgoTest(node ast.Node) bool {
 func detectExpectations(call *ast.CallExpr) []map[string]string {
 	var expectations []map[string]string
 
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return expectations
-	}
-
 	// Check for Ginkgo/Gomega expectation patterns
-	expectationPatterns := map[string]string{
-		"Expect":       "assertion",
-		"Should":       "assertion",
-		"Eventually":   "eventual_assertion",
-		"Consistently": "consistent_assertion",
-	}
-
-	if pattern, exists := expectationPatterns[sel.Sel.Name]; exists {
-		expectations = append(expectations, map[string]string{
-			"target":    "test_condition",
-			"condition": pattern,
-		})
-	}
-
-	// Check for specific assertion types
-	if sel.Sel.Name == "Expect" {
-		if len(call.Args) > 0 {
-			if sel2, ok := call.Args[0].(*ast.CallExpr); ok {
-				if sel3, ok := sel2.Fun.(*ast.SelectorExpr); ok {
-					switch sel3.Sel.Name {
-					case "ToNot", "NotTo":
-						expectations = append(expectations, map[string]string{
-							"target":    "error_condition",
-							"condition": "should_not_occur",
-						})
-					case "To", "Should":
-						expectations = append(expectations, map[string]string{
-							"target":    "test_condition",
-							"condition": "should_be_true",
-						})
-					}
-				}
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		// Check for Expect() calls
+		if sel.Sel.Name == "Expect" {
+			expectation := extractGinkgoExpectation(call)
+			if expectation != nil {
+				expectations = append(expectations, expectation)
 			}
+		} else if sel.Sel.Name == "ToNot" || sel.Sel.Name == "To" || sel.Sel.Name == "Should" || sel.Sel.Name == "Eventually" || sel.Sel.Name == "Consistently" {
+			// Check for chained matcher methods like .ToNot(HaveOccurred())
+			expectation := extractChainedMatcher(call)
+			if expectation != nil {
+				expectations = append(expectations, expectation)
+			}
+		}
+	} else if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "Expect" {
+		// Check for direct function calls like Expect(...)
+		expectation := extractGinkgoExpectation(call)
+		if expectation != nil {
+			expectations = append(expectations, expectation)
 		}
 	}
 
 	return expectations
+}
+
+func extractGinkgoExpectation(call *ast.CallExpr) map[string]string {
+	// Handle Expect(...) patterns
+	if len(call.Args) == 0 {
+		return nil
+	}
+
+	// Get the first argument (the value being tested)
+	arg := call.Args[0]
+
+	// Convert the argument to a string representation
+	argStr := astToString(arg)
+	if argStr == "" {
+		return nil
+	}
+
+	// For direct Expect calls, analyze the content for better classification
+	return extractChainedExpectation(arg, call)
+}
+
+func extractChainedMatcher(call *ast.CallExpr) map[string]string {
+	// This is a chained matcher method like .ToNot(HaveOccurred())
+	// We need to find the original value being tested
+	// For now, we'll extract the matcher method name and arguments
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+
+	matcherName := sel.Sel.Name
+	args := make([]string, len(call.Args))
+	for i, arg := range call.Args {
+		args[i] = astToString(arg)
+	}
+
+	// Create a meaningful condition from the matcher
+	condition := matcherName + "(" + strings.Join(args, ", ") + ")"
+
+	// Try to classify based on the matcher type
+	target := "test_condition"
+	if strings.Contains(condition, "HaveOccurred") || strings.Contains(condition, "Not(HaveOccurred)") {
+		target = "test_condition" // Error handling
+	} else if strings.Contains(condition, "BeEmpty") || strings.Contains(condition, "Not(BeEmpty)") {
+		target = "resource_count" // Empty/not empty usually means count checks
+	} else if strings.Contains(condition, "BeTrue") || strings.Contains(condition, "BeFalse") {
+		target = "test_condition" // Boolean conditions
+	}
+
+	return map[string]string{
+		"target":    target,
+		"condition": condition,
+	}
+}
+
+func extractChainedExpectation(arg ast.Expr, call *ast.CallExpr) map[string]string {
+	// Extract the actual value being tested, not just the matcher
+	argStr := astToString(arg)
+
+	// For Ginkgo/Gomega, we want to extract the actual value being tested
+	// The matcher (BeTrue, Not(BeEmpty), etc.) is less important than the value
+
+	// Standardized target classification for similarity search compatibility
+	target := "test_condition" // Default target
+
+	// Check for common patterns in the actual value being tested
+	if strings.Contains(argStr, "err") {
+		target = "test_condition" // Error conditions are still test conditions
+	} else if strings.Contains(argStr, "version") || strings.Contains(argStr, "image") {
+		target = "resource_version"
+	} else if strings.Contains(argStr, "len(") || strings.Contains(argStr, "count") {
+		target = "resource_count"
+	} else if strings.Contains(argStr, "online") || strings.Contains(argStr, "status") {
+		target = "resource_status"
+	} else if strings.Contains(argStr, "empty") || strings.Contains(argStr, "deleted") {
+		target = "resource_deletion"
+	} else if strings.Contains(argStr, "cluster") || strings.Contains(argStr, "namespace") || strings.Contains(argStr, "pod") {
+		target = "resource_count" // Cluster/namespace/pod related tests are usually about counts
+	}
+
+	// Create a more meaningful condition that includes both the value and the matcher
+	condition := argStr
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Expect" {
+		// Try to find the chained matcher method
+		// This is a simplified approach - in practice, you'd need to traverse the full call chain
+		condition = argStr + " (Gomega matcher)"
+	}
+
+	return map[string]string{
+		"target":    target,
+		"condition": condition,
+	}
+}
+
+func astToString(node ast.Node) string {
+	// Enhanced AST to string conversion for better Ginkgo/Gomega parsing
+	switch x := node.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.BasicLit:
+		return x.Value
+	case *ast.SelectorExpr:
+		return astToString(x.X) + "." + x.Sel.Name
+	case *ast.CallExpr:
+		funcStr := astToString(x.Fun)
+		args := make([]string, len(x.Args))
+		for i, arg := range x.Args {
+			args[i] = astToString(arg)
+		}
+		return funcStr + "(" + strings.Join(args, ", ") + ")"
+	case *ast.BinaryExpr:
+		return astToString(x.X) + " " + x.Op.String() + " " + astToString(x.Y)
+	case *ast.UnaryExpr:
+		return x.Op.String() + astToString(x.X)
+	case *ast.IndexExpr:
+		return astToString(x.X) + "[" + astToString(x.Index) + "]"
+	case *ast.KeyValueExpr:
+		return astToString(x.Key) + ":" + astToString(x.Value)
+	case *ast.CompositeLit:
+		// For composite literals, try to extract meaningful info
+		if sel, ok := x.Type.(*ast.SelectorExpr); ok {
+			return "composite_" + astToString(sel)
+		}
+		return "composite_literal"
+	default:
+		// For unknown types, try to extract a meaningful string
+		return fmt.Sprintf("%T", node)
+	}
 }
 
 func detectExternals(call *ast.CallExpr) []string {
