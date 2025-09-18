@@ -227,6 +227,69 @@ func detectEcoGoinfraPattern(call *ast.CallExpr) (gvk string, verb string) {
 		}
 	}
 
+	// Check for builder pattern method calls (e.g., nfdNsBuilder.Create(), metallbenv.CreateNewMetalLbDaemonSetAndWaitUntilItsRunning())
+	if ident, ok := sel.X.(*ast.Ident); ok {
+		// Look for patterns like *Builder.Create(), *Builder.Delete(), *Builder.Update()
+		if strings.HasSuffix(ident.Name, "Builder") || strings.HasSuffix(ident.Name, "CSV") || strings.HasSuffix(ident.Name, "CR") {
+			if verbSet[sel.Sel.Name] {
+				// Try to determine GVK from the builder name
+				gvk := ""
+				if strings.Contains(ident.Name, "Ns") || strings.Contains(ident.Name, "Namespace") {
+					gvk = "v1/Namespace"
+				} else if strings.Contains(ident.Name, "Pod") {
+					gvk = "v1/Pod"
+				} else if strings.Contains(ident.Name, "Deployment") {
+					gvk = "apps/v1/Deployment"
+				} else if strings.Contains(ident.Name, "Service") {
+					gvk = "v1/Service"
+				} else if strings.Contains(ident.Name, "Route") {
+					gvk = "route.openshift.io/v1/Route"
+				} else if strings.Contains(ident.Name, "CSV") {
+					gvk = "operators.coreos.com/v1alpha1/ClusterServiceVersion"
+				} else if strings.Contains(ident.Name, "Sub") || strings.Contains(ident.Name, "Subscription") {
+					gvk = "operators.coreos.com/v1alpha1/Subscription"
+				} else if strings.Contains(ident.Name, "Og") || strings.Contains(ident.Name, "OperatorGroup") {
+					gvk = "operators.coreos.com/v1alpha1/OperatorGroup"
+				} else if strings.Contains(ident.Name, "DaemonSet") {
+					gvk = "apps/v1/DaemonSet"
+				}
+				return gvk, sel.Sel.Name
+			}
+		}
+	}
+
+	// Check for environment/utility function patterns (e.g., metallbenv.*, nfdenv.*)
+	if ident, ok := sel.X.(*ast.Ident); ok {
+		if strings.HasSuffix(ident.Name, "env") || strings.HasSuffix(ident.Name, "Env") {
+			// These are typically environment setup/teardown functions
+			// Try to determine the resource type from the function name
+			gvk := ""
+			if strings.Contains(ident.Name, "metallb") {
+				gvk = "apps/v1/DaemonSet" // MetalLB typically uses DaemonSets
+			} else if strings.Contains(ident.Name, "nfd") {
+				gvk = "apps/v1/DaemonSet" // NFD typically uses DaemonSets
+			} else if strings.Contains(ident.Name, "sriov") {
+				gvk = "apps/v1/DaemonSet" // SR-IOV typically uses DaemonSets
+			}
+			if gvk != "" {
+				// Determine verb from function name
+				verb := "unknown"
+				if strings.Contains(sel.Sel.Name, "Create") {
+					verb = "create"
+				} else if strings.Contains(sel.Sel.Name, "Delete") {
+					verb = "delete"
+				} else if strings.Contains(sel.Sel.Name, "Update") {
+					verb = "update"
+				} else if strings.Contains(sel.Sel.Name, "Get") {
+					verb = "get"
+				} else if strings.Contains(sel.Sel.Name, "List") {
+					verb = "list"
+				}
+				return gvk, verb
+			}
+		}
+	}
+
 	return "", ""
 }
 
@@ -620,7 +683,15 @@ func main() {
 
 		// If file has Ginkgo patterns, create a consolidated spec
 		if hasGinkgoPatterns {
-			spec := KubeSpec{Level: "integration"}
+			spec := KubeSpec{
+				Level:             "integration",
+				Preconditions:     []string{},
+				Actions:           []Action{},
+				Expectations:      []map[string]string{},
+				OpenShiftSpecific: []string{},
+				Concurrency:       []string{},
+				Artifacts:         []string{},
+			}
 			// Replace full path with basename in test_id
 			basename := filepath.Base(*root)
 			relativePath := strings.TrimPrefix(strings.TrimPrefix(path, *root), "/")
@@ -793,7 +864,15 @@ func main() {
 				return true
 			}
 
-			spec := KubeSpec{Level: "unknown"}
+			spec := KubeSpec{
+				Level:             "unknown",
+				Preconditions:     []string{},
+				Actions:           []Action{},
+				Expectations:      []map[string]string{},
+				OpenShiftSpecific: []string{},
+				Concurrency:       []string{},
+				Artifacts:         []string{},
+			}
 			// Replace full path with basename in test_id
 			basename := filepath.Base(*root)
 			relativePath := strings.TrimPrefix(strings.TrimPrefix(path, *root), "/")

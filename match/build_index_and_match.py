@@ -20,9 +20,51 @@ def load_specs(path: str) -> List[Dict[str, Any]]:
                 pass
     return specs
 
+def is_empty_test(spec: Dict[str, Any]) -> bool:
+    """Check if a test spec is empty (has no meaningful content)."""
+    # Handle None values by converting to empty lists
+    actions = spec.get('actions') or []
+    expectations = spec.get('expectations') or []
+    preconditions = spec.get('preconditions') or []
+    openshift_specific = spec.get('openshift_specific') or []
+    concurrency = spec.get('concurrency') or []
+    artifacts = spec.get('artifacts') or []
+    
+    # A test is considered empty if it has:
+    # 1. No actions AND no expectations
+    # 2. No other meaningful content (preconditions, openshift_specific, concurrency, artifacts)
+    has_actions = len(actions) > 0
+    has_expectations = len(expectations) > 0
+    has_other_content = (len(preconditions) > 0 or 
+                        len(openshift_specific) > 0 or 
+                        len(concurrency) > 0 or 
+                        len(artifacts) > 0)
+    
+    # Empty if no actions, no expectations, and no other content
+    return not (has_actions or has_expectations or has_other_content)
+
+def filter_empty_tests(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter out empty tests from the specs list."""
+    filtered = []
+    empty_count = 0
+    
+    for spec in specs:
+        if is_empty_test(spec):
+            empty_count += 1
+        else:
+            filtered.append(spec)
+    
+    print(f"Filtered out {empty_count} empty tests, kept {len(filtered)} meaningful tests")
+    return filtered
+
 def spec_to_text(spec: Dict[str, Any]) -> str:
     # Don't include test_id in the content - it's used as document ID
     parts = []
+    
+    # Include level field to differentiate empty tests
+    level = spec.get('level', 'unknown')
+    if level:
+        parts.append(f"level:{level}")
     
     # Handle None values by converting to empty lists
     preconditions = spec.get('preconditions') or []
@@ -140,6 +182,12 @@ def main():
     for s in go_specs: s['_repo'] = 'go'
     py_specs = load_specs(args.py)
     for s in py_specs: s['_repo'] = 'py'
+    
+    # Filter out empty tests
+    print("Filtering Go specs...")
+    go_specs = filter_empty_tests(go_specs)
+    print("Filtering Python specs...")
+    py_specs = filter_empty_tests(py_specs)
 
     model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
     go_embs = build_embeddings(go_specs, model)
