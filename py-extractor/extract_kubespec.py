@@ -20,7 +20,17 @@ SCC_CLI_PATTERNS = [
 
 # Purpose detection patterns - keywords that indicate test purpose
 PURPOSE_PATTERNS = {
-    "NETWORK_CONNECTIVITY": ["curl", "url", "frr", "routing", "connectivity", "reach", "ping", "network", "traffic"],
+    "NETWORK_CONNECTIVITY": [
+        "curl",
+        "url",
+        "frr",
+        "routing",
+        "connectivity",
+        "reach",
+        "ping",
+        "network",
+        "traffic",
+    ],
     "POD_HEALTH": ["pods", "status", "running", "phase", "health", "ready", "condition", "state"],
     "POD_MANAGEMENT": ["create", "delete", "update", "pod", "deployment", "replica", "scale"],
     "NETWORK_POLICY": ["policy", "network", "multinetwork", "ingress", "egress", "security"],
@@ -37,14 +47,14 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
     """Extract meaningful expectation information from assert statements"""
     if not assert_node.test:
         return None
-    
+
     # Helper function to safely convert AST nodes to strings
     def ast_to_string(node):
-        if hasattr(ast, 'unparse'):
+        if hasattr(ast, "unparse"):
             return ast.unparse(node)
         else:
             return str(node)
-    
+
     # Helper function to convert comparison operators to strings
     def op_to_string(op):
         op_map = {
@@ -57,21 +67,30 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
             ast.Is: "is",
             ast.IsNot: "is not",
             ast.In: "in",
-            ast.NotIn: "not in"
+            ast.NotIn: "not in",
         }
         return op_map.get(type(op), str(op))
-    
+
     # Handle comparison operations (==, !=, <, >, etc.)
     if isinstance(assert_node.test, ast.Compare):
         left = ast_to_string(assert_node.test.left)
         ops = [op_to_string(op) for op in assert_node.test.ops]
         comparators = [ast_to_string(comp) for comp in assert_node.test.comparators]
-        
+
         if len(ops) == 1 and len(comparators) == 1:
             condition = f"{left} {ops[0]} {comparators[0]}"
             # Standardized target classification for similarity search compatibility
             target = "test_condition"  # Default to match Go extractor
-            if "len(" in left and any(resource in left.lower() for resource in ["baremetalhost", "clusterdeployment", "namespace", "pod", "service"]):
+            if "len(" in left and any(
+                resource in left.lower()
+                for resource in [
+                    "baremetalhost",
+                    "clusterdeployment",
+                    "namespace",
+                    "pod",
+                    "service",
+                ]
+            ):
                 target = "resource_count"
             elif "online" in left.lower() or "status" in left.lower():
                 target = "resource_status"
@@ -79,9 +98,9 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
                 target = "resource_deletion"
             elif "version" in left.lower() or "image" in left.lower():
                 target = "resource_version"
-            
+
             return {"target": target, "condition": condition}
-    
+
     # Handle membership tests (in, not in)
     elif isinstance(assert_node.test, ast.Compare) and len(assert_node.test.ops) == 1:
         op = assert_node.test.ops[0]
@@ -89,15 +108,18 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
             left = ast_to_string(assert_node.test.left)
             right = ast_to_string(assert_node.test.comparators[0])
             condition = f"{left} {'not in' if isinstance(op, ast.NotIn) else 'in'} {right}"
-            return {"target": "resource_deletion" if isinstance(op, ast.NotIn) else "test_condition", "condition": condition}
-    
+            return {
+                "target": "resource_deletion" if isinstance(op, ast.NotIn) else "test_condition",
+                "condition": condition,
+            }
+
     # Handle boolean operations (and, or)
     elif isinstance(assert_node.test, ast.BoolOp):
         op = "and" if isinstance(assert_node.test.op, ast.And) else "or"
         values = [ast_to_string(v) for v in assert_node.test.values]
         condition = f" {op} ".join(values)
         return {"target": "compound_condition", "condition": condition}
-    
+
     # Generic assertion
     condition = ast_to_string(assert_node.test)
     return {"target": "test_condition", "condition": condition}
@@ -127,15 +149,12 @@ class TestVisitor(ast.NodeVisitor):
             "purpose": "",
         }
         for dec in node.decorator_list:
-            if (
-                isinstance(dec, ast.Call)
-                and getattr(dec.func, "attr", "") == "parametrize"
-            ):
+            if isinstance(dec, ast.Call) and getattr(dec.func, "attr", "") == "parametrize":
                 spec["preconditions"].append("parametrized")
         for n in ast.walk(node):
             if isinstance(n, ast.Call):
                 func = n.func
-                
+
                 # Check for direct helper function calls (e.g., get_resource, get_resource_from_namespace)
                 if isinstance(func, ast.Name) and func.id in [
                     "get_resource",
@@ -148,10 +167,8 @@ class TestVisitor(ast.NodeVisitor):
                             spec["actions"].append({"gvk": gvk, "verb": "get"})
                     elif n.args:
                         # For any arguments (including variables), add a generic action
-                        spec["actions"].append(
-                            {"gvk": "unknown/unknown", "verb": "get"}
-                        )
-                
+                        spec["actions"].append({"gvk": "unknown/unknown", "verb": "get"})
+
                 # Check for attribute-based calls
                 elif isinstance(func, ast.Attribute):
                     mname = func.attr or ""
@@ -189,9 +206,7 @@ class TestVisitor(ast.NodeVisitor):
                                 spec["actions"].append({"gvk": gvk, "verb": "get"})
                         elif n.args:
                             # For any arguments (including variables), add a generic action
-                            spec["actions"].append(
-                                {"gvk": "unknown/unknown", "verb": "get"}
-                            )
+                            spec["actions"].append({"gvk": "unknown/unknown", "verb": "get"})
                 if isinstance(func, ast.Attribute) and func.attr in {
                     "run",
                     "check_call",
@@ -222,12 +237,8 @@ class TestVisitor(ast.NodeVisitor):
                                     if k in low:
                                         m = re.search(k + r"=([^\s]+)", low)
                                         if m:
-                                            spec["preconditions"].append(
-                                                f"psa:{k}={m.group(1)}"
-                                            )
-                            if any(
-                                p in low for p in [s.lower() for s in SCC_CLI_PATTERNS]
-                            ):
+                                            spec["preconditions"].append(f"psa:{k}={m.group(1)}")
+                            if any(p in low for p in [s.lower() for s in SCC_CLI_PATTERNS]):
                                 spec["preconditions"].append("equiv:scc~psa")
                             if isinstance(func, ast.Attribute) and func.attr == "raises":
                                 if getattr(func.value, "id", "") == "pytest":
@@ -238,7 +249,7 @@ class TestVisitor(ast.NodeVisitor):
                 m = GOLDEN_RE.search(n.value)
                 if m:
                     spec["artifacts"].append(m.group(0))
-            
+
             # Check for assert statements (expectations)
             if isinstance(n, ast.Assert):
                 expectation = extract_assertion_expectation(n)
@@ -279,7 +290,9 @@ class TestVisitor(ast.NodeVisitor):
 
         # Detect purpose based on test content
         docstring = ast.get_docstring(node) or ""
-        spec["purpose"] = detect_purpose(node.name, docstring, spec["actions"], spec["expectations"])
+        spec["purpose"] = detect_purpose(
+            node.name, docstring, spec["actions"], spec["expectations"]
+        )
 
         self.specs.append(spec)
 
@@ -287,18 +300,12 @@ class TestVisitor(ast.NodeVisitor):
 def guess_gvk_from_attr(attr: ast.Attribute) -> str:
     root = attr
     while isinstance(root, ast.Attribute):
-        if isinstance(root.value, ast.Call) and isinstance(
-            root.value.func, ast.Attribute
-        ):
+        if isinstance(root.value, ast.Call) and isinstance(root.value.func, ast.Attribute):
             api = root.value.func.attr
             group, version = api_to_group_version(api)
             if group or version:
                 return f"{group+'/'+version if group else version}"
-        root = (
-            root.value
-            if isinstance(root.value, ast.Attribute)
-            else getattr(root, "value", None)
-        )
+        root = root.value if isinstance(root.value, ast.Attribute) else getattr(root, "value", None)
         if root is None:
             break
     return ""
@@ -444,7 +451,7 @@ def detect_purpose(test_name: str, docstring: str, actions: list, expectations: 
     content = test_name.lower()
     if docstring:
         content += " " + docstring.lower()
-    
+
     for action in actions:
         if isinstance(action, dict):
             gvk = action.get("gvk", "")
@@ -453,13 +460,13 @@ def detect_purpose(test_name: str, docstring: str, actions: list, expectations: 
                 content += " " + gvk.lower()
             if verb:
                 content += " " + verb.lower()
-    
+
     for exp in expectations:
         if isinstance(exp, dict):
             condition = exp.get("condition", "")
             if condition:
                 content += " " + condition.lower()
-    
+
     # Score each purpose category based on keyword matches
     scores = {}
     for purpose, keywords in PURPOSE_PATTERNS.items():
@@ -468,7 +475,7 @@ def detect_purpose(test_name: str, docstring: str, actions: list, expectations: 
             if keyword in content:
                 score += 1
         scores[purpose] = score
-    
+
     # Find the purpose with the highest score
     max_score = 0
     detected_purpose = "UNKNOWN"
@@ -476,11 +483,11 @@ def detect_purpose(test_name: str, docstring: str, actions: list, expectations: 
         if score > max_score:
             max_score = score
             detected_purpose = purpose
-    
+
     # If no keywords matched, try to infer from operations
     if max_score == 0:
         detected_purpose = infer_purpose_from_operations(actions)
-    
+
     return detected_purpose
 
 
@@ -492,14 +499,14 @@ def infer_purpose_from_operations(actions: list) -> str:
     operator_ops = 0
     has_create_delete_update = False
     has_get_list = False
-    
+
     for action in actions:
         if not isinstance(action, dict):
             continue
-            
+
         gvk = action.get("gvk", "").lower()
         verb = action.get("verb", "").lower()
-        
+
         # Count pod-related operations
         if "pod" in gvk or "deployment" in gvk or "replicaset" in gvk:
             pod_ops += 1
@@ -507,19 +514,19 @@ def infer_purpose_from_operations(actions: list) -> str:
                 has_create_delete_update = True
             if verb in ["get", "list"]:
                 has_get_list = True
-        
+
         # Count network-related operations
         if "network" in gvk or "service" in gvk or "ingress" in gvk or "route" in gvk:
             network_ops += 1
-        
+
         # Count storage-related operations
         if "pvc" in gvk or "pv" in gvk or "storage" in gvk:
             storage_ops += 1
-        
+
         # Count operator-related operations
         if "operator" in gvk or "subscription" in gvk or "csv" in gvk:
             operator_ops += 1
-    
+
     # Determine purpose based on operation counts
     if pod_ops > 0 and has_create_delete_update:
         return "POD_MANAGEMENT"
@@ -531,7 +538,7 @@ def infer_purpose_from_operations(actions: list) -> str:
         return "STORAGE_TESTING"
     if operator_ops > 0:
         return "OPERATOR_MANAGEMENT"
-    
+
     return "RESOURCE_VALIDATION"
 
 

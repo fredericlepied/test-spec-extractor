@@ -1,144 +1,132 @@
-# CLAUDE.md
+# AI Coding Assistent Rules for Test Spec Extractor
 
-This file provides guidance to AI Coding assistants when working with code in this repository.
+## Code Formatting
 
-## Commands
+### Python Code
+- Always run `black` with line length 100 on Python files before committing
+- Use `black py-extractor/ match/ --line-length 100`
+- Follow PEP 8 style guidelines
+- Use type hints where appropriate
 
-### Automated Pipeline (Recommended)
-```bash
-# Single repositories
-./extract-and-match.sh -g /path/to/eco-gotests -p /path/to/eco-pytests
+### Go Code
+- Always run `gofmt -w` on Go files before committing
+- Use `gofmt -w go-extractor/main.go`
+- Follow standard Go formatting conventions
+- Use `go vet` to check for potential issues
 
-# Multiple repositories
-./extract-and-match.sh -g /path/to/eco-gotests -g /path/to/openshift-tests -p /path/to/eco-pytests
+## Code Quality
 
-# Custom output directory
-./extract-and-match.sh -g /path/to/go-tests -p /path/to/py-tests --output-dir my_results
-```
+### General Rules
+- Write clear, self-documenting code with meaningful variable names
+- Add comments for complex logic and business rules
+- Keep functions focused and single-purpose
+- Use consistent error handling patterns
 
-### Manual Steps
+### Python Specific
+- Use f-strings for string formatting
+- Prefer list/dict comprehensions over loops when readable
+- Use `pathlib.Path` for file operations
+- Handle exceptions explicitly with try/except blocks
 
-#### Build and Run Extractors
-```bash
-# Go extractor
-cd go-extractor
-go build -o kubespec-go
-./kubespec-go -root /path/to/go/repo > ../go_specs.jsonl
+### Go Specific
+- Use `context.Context` for long-running operations
+- Return errors explicitly, don't panic
+- Use meaningful variable names (avoid abbreviations)
+- Group related declarations together
 
-# Python extractor  
-cd py-extractor
-python extract_kubespec.py --root /path/to/python/tests > ../py_specs.jsonl
-```
+## Testing
 
-#### Matching and Analysis
-```bash
-cd match
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python build_index_and_match.py --go ../go_specs.jsonl --py ../py_specs.jsonl --out report.csv --cov coverage_matrix.csv
+### Test Structure
+- Write tests for all public functions
+- Use descriptive test names that explain the scenario
+- Test both success and failure cases
+- Mock external dependencies appropriately
 
-# With LLM re-ranking (requires environment variables)
-export LLM_API_KEY=...
-export LLM_MODEL=gpt-4o-mini
-python build_index_and_match.py --go ../go_specs.jsonl --py ../py_specs.jsonl --out report.csv --llm
-```
+### Test Data
+- Use realistic test data that reflects real-world usage
+- Keep test data minimal but comprehensive
+- Use constants for repeated test values
 
-## Architecture
+## Documentation
 
-This is a cross-language test analysis toolkit that extracts KubeSpecs from Go and Python test files, then matches them using semantic embeddings with **purpose-based filtering** to reduce false positives. The system is OpenShift-aware with special handling for Route↔Ingress and SCC↔PSA equivalents.
+### Code Comments
+- Document public APIs with docstrings
+- Explain complex algorithms and business logic
+- Keep comments up-to-date with code changes
+- Use TODO comments sparingly and with clear ownership
 
-### Core Components
+### README Updates
+- Update README.md when adding new features
+- Include usage examples for new functionality
+- Keep installation and setup instructions current
+- Document any breaking changes
 
-**go-extractor/main.go**: AST-based Go test parser that extracts structured test specifications including:
-- GVK (Group/Version/Kind) detection from composite literals
-- Kubernetes API verb extraction (Create, Update, Delete, etc.)
-- OpenShift-specific resource detection
-- PSA (Pod Security Admission) label extraction from namespace manifests
-- Test artifacts and golden files discovery
-- **Purpose detection** from test names, comments, and operations
-- **Helper function detection** across files for cross-file operation detection
+## Git Workflow
 
-**py-extractor/extract_kubespec.py**: Python AST visitor that extracts similar specifications from Python tests:
-- Method name-based verb detection (create_, patch_, delete_, etc.)
-- CLI command parsing for kubectl/oc operations
-- PSA and SCC pattern recognition in subprocess calls
-- Parametrized test detection
-- **Purpose detection** from test names, docstrings, and operations
-- **openshift library** support for `oc.selector()` and `get_resource()` calls
+### Commit Messages
+- Use clear, descriptive commit messages
+- Start with a verb in imperative mood
+- Include scope when relevant (e.g., "feat(extractor): add purpose detection")
+- Reference issues when applicable
 
-**match/build_index_and_match.py**: Semantic matching engine using sentence transformers with purpose-based filtering:
-- Converts test specs to text embeddings using SentenceTransformer
-- Uses FAISS for efficient similarity search
-- Implements OpenShift equivalence expansion (Route↔Ingress, SCC↔PSA)
-- **Purpose-based filtering** to eliminate false positives
-- **Multi-level similarity detection** (exact, resource, category, verb-group)
-- **Enhanced scoring** with purpose-based boosts and penalties
-- Generates bidirectional matching pairs and coverage matrices
+### Code Review
+- Review all code changes before merging
+- Check for formatting issues
+- Verify tests pass
+- Ensure documentation is updated
 
-**match/llm_rerank.py**: Optional LLM-based re-ranking for improved semantic matching:
-- Uses OpenAI-compatible APIs for test spec comparison
-- Provides structured JSON output with overlap assessment
-- Blends embedding-based and LLM scores for final ranking
+## Performance
 
-### Key Data Structures
+### Optimization Guidelines
+- Profile code before optimizing
+- Focus on algorithmic improvements first
+- Use appropriate data structures
+- Consider memory usage for large datasets
 
-**KubeSpec/spec structure**: Standardized test specification with fields:
-- `test_id`: File path and function name (with basename substitution)
-- `level`: "integration" vs "unknown" based on mutating operations
-- `actions`: List of GVK+verb combinations and detected operations
-- `preconditions`: PSA labels, parametrization, equivalence bridges
-- `expectations`: Structured test expectations with target classification
-- `openshift_specific`: OpenShift-only resources detected
-- `concurrency`: Concurrency-related test patterns
-- `artifacts`: Test data files and golden references
-- **`purpose`**: Detected test purpose (POD_HEALTH, NETWORK_CONNECTIVITY, etc.)
+### Resource Management
+- Close files and connections properly
+- Use context managers in Python
+- Handle cleanup in defer statements in Go
+- Monitor memory usage in long-running processes
 
-### Purpose-Based Filtering System
+## Security
 
-**Purpose Categories**:
-- `POD_HEALTH`: Pod status validation, health checks
-- `POD_MANAGEMENT`: Pod creation, deletion, updates
-- `NETWORK_CONNECTIVITY`: Network reachability, routing tests
-- `NETWORK_POLICY`: Network policies, security
-- `RESOURCE_VALIDATION`: Resource existence, counts
-- `OPERATOR_MANAGEMENT`: Operator testing
-- `STORAGE_TESTING`: Storage, volumes
-- `SECURITY_TESTING`: Security contexts, RBAC
+### Input Validation
+- Validate all external inputs
+- Sanitize file paths and user data
+- Use parameterized queries for database operations
+- Handle sensitive data appropriately
 
-**Compatibility Matrix**: Defines which purposes can match:
-- `POD_MANAGEMENT` ↔ `POD_HEALTH` (compatible)
-- `NETWORK_POLICY` ↔ `NETWORK_CONNECTIVITY` (compatible)
-- `NETWORK_CONNECTIVITY` ↔ `POD_HEALTH` (incompatible - filtered out)
+### Dependencies
+- Keep dependencies up-to-date
+- Use dependency scanning tools
+- Prefer well-maintained, popular packages
+- Document any security-related dependencies
 
-**Scoring Enhancements**:
-- Same purpose: +0.20 boost
-- Compatible purpose: +0.10 boost
-- Incompatible purpose: -0.30 penalty
+## Purpose-Based Filtering System
 
-### OpenShift Awareness
+### Purpose Detection
+- Add new purpose categories to both Go and Python extractors
+- Update compatibility matrix when adding new purposes
+- Test purpose detection with real test cases
+- Document purpose patterns and keywords
 
-The system automatically detects and creates equivalence bridges:
-- Route (OpenShift) ↔ Ingress (Kubernetes) mapping
-- SCC (OpenShift) ↔ PSA (Pod Security Admission) mapping
-- Handles both API-level detection and CLI command parsing
+### Matching Logic
+- Maintain purpose compatibility rules
+- Test filtering effectiveness with real data
+- Monitor false positive rates
+- Adjust scoring weights based on validation results
 
-### Performance Improvements
+## OpenShift Integration
 
-**Filtering Impact**:
-- Before: 1370 total matches (many false positives)
-- After: 657 total matches (52% reduction in false positives)
-- Quality: Only compatible purpose matches remain
+### Resource Mapping
+- Keep Route↔Ingress mappings current
+- Update SCC↔PSA mappings as needed
+- Test with real OpenShift resources
+- Document any new equivalence rules
 
-**Validation Metrics**:
-- Purpose compatibility rate: 50%+ of high-similarity matches
-- Operation validation: Detects shared operations in meaningful matches
-- False positive reduction: 52% fewer misleading matches
-
-### Recent Enhancements
-
-1. **Purpose-Based Filtering**: Eliminates false positives by matching only compatible test purposes
-2. **Enhanced Test Detection**: Better detection of helper functions and cross-file operations
-3. **Multi-Level Similarity**: Exact, resource, category, and verb-group similarity detection
-4. **Utility Test Filtering**: Automatically filters out helper functions and utility tests
-5. **Improved Scoring**: Purpose-based boosts and penalties for better match quality
-6. **Comprehensive Validation**: Detailed validation metrics and quality reporting
+### CLI Command Mapping
+- Map new kubectl/oc commands to API operations
+- Test command parsing with real examples
+- Handle edge cases in command parsing
+- Update documentation for new commands
