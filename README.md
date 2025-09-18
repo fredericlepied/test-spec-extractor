@@ -3,7 +3,22 @@
 Toolkit to extract KubeSpecs from Go/Python tests, build embeddings, and match cross-language overlap.
 OpenShift-aware (Route↔Ingress, SCC↔PSA) with optional LLM re-ranking.
 
-## How to run
+## Quick Start
+
+**Automated Pipeline (Recommended):**
+
+```bash
+# Single repositories
+./extract-and-match.sh -g /path/to/eco-gotests -p /path/to/eco-pytests
+
+# Multiple repositories
+./extract-and-match.sh -g /path/to/eco-gotests -g /path/to/openshift-tests -p /path/to/eco-pytests
+
+# Custom output directory
+./extract-and-match.sh -g /path/to/go-tests -p /path/to/py-tests --output-dir my_results
+```
+
+## Manual Steps
 
 1) Go extractor
 
@@ -29,7 +44,7 @@ $ pip install -r requirements.txt
 $ python build_index_and_match.py --go go_specs.jsonl --py py_specs.jsonl --out report.csv --cov coverage_matrix.csv
 ```
 
-4) Optional LLM re-rank
+4) Optional LLM re-rank (broken)
 
 ```Shell
 export LLM_API_KEY=...

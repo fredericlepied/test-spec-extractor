@@ -4,7 +4,21 @@ This file provides guidance to AI Coding assistants when working with code in th
 
 ## Commands
 
-### Build and Run Extractors
+### Automated Pipeline (Recommended)
+```bash
+# Single repositories
+./extract-and-match.sh -g /path/to/eco-gotests -p /path/to/eco-pytests
+
+# Multiple repositories
+./extract-and-match.sh -g /path/to/eco-gotests -g /path/to/openshift-tests -p /path/to/eco-pytests
+
+# Custom output directory
+./extract-and-match.sh -g /path/to/go-tests -p /path/to/py-tests --output-dir my_results
+```
+
+### Manual Steps
+
+#### Build and Run Extractors
 ```bash
 # Go extractor
 cd go-extractor
@@ -16,7 +30,7 @@ cd py-extractor
 python extract_kubespec.py --root /path/to/python/tests > ../py_specs.jsonl
 ```
 
-### Matching and Analysis
+#### Matching and Analysis
 ```bash
 cd match
 python -m venv .venv && source .venv/bin/activate
