@@ -31,7 +31,6 @@ type KubeSpec struct {
 	Preconditions     []string            `json:"preconditions"`
 	Actions           []Action            `json:"actions"`
 	Expectations      []map[string]string `json:"expectations"`
-	Externals         []string            `json:"externals"`
 	OpenShiftSpecific []string            `json:"openshift_specific"`
 	Concurrency       []string            `json:"concurrency"`
 	Artifacts         []string            `json:"artifacts"`
@@ -314,6 +313,132 @@ func detectExternals(call *ast.CallExpr) []string {
 	return externals
 }
 
+func mapCommandToAPI(cmd string) (gvk string, verb string) {
+	cmd = strings.ToLower(cmd)
+
+	// kubectl/oc create patterns
+	if strings.Contains(cmd, " create ") {
+		if strings.Contains(cmd, " pod ") || strings.Contains(cmd, " pods ") {
+			return "v1/Pod", "create"
+		}
+		if strings.Contains(cmd, " service ") || strings.Contains(cmd, " svc ") {
+			return "v1/Service", "create"
+		}
+		if strings.Contains(cmd, " deployment ") || strings.Contains(cmd, " deploy ") {
+			return "apps/v1/Deployment", "create"
+		}
+		if strings.Contains(cmd, " route ") {
+			return "route.openshift.io/v1/Route", "create"
+		}
+		if strings.Contains(cmd, " namespace ") || strings.Contains(cmd, " ns ") {
+			return "v1/Namespace", "create"
+		}
+		if strings.Contains(cmd, " configmap ") {
+			return "v1/ConfigMap", "create"
+		}
+		if strings.Contains(cmd, " secret ") {
+			return "v1/Secret", "create"
+		}
+		if strings.Contains(cmd, " ingress ") {
+			return "networking.k8s.io/v1/Ingress", "create"
+		}
+	}
+
+	// kubectl/oc get patterns
+	if strings.Contains(cmd, " get ") {
+		if strings.Contains(cmd, " pod ") || strings.Contains(cmd, " pods ") {
+			return "v1/Pod", "get"
+		}
+		if strings.Contains(cmd, " service ") || strings.Contains(cmd, " svc ") {
+			return "v1/Service", "get"
+		}
+		if strings.Contains(cmd, " deployment ") || strings.Contains(cmd, " deploy ") {
+			return "apps/v1/Deployment", "get"
+		}
+		if strings.Contains(cmd, " route ") {
+			return "route.openshift.io/v1/Route", "get"
+		}
+		if strings.Contains(cmd, " namespace ") || strings.Contains(cmd, " ns ") {
+			return "v1/Namespace", "get"
+		}
+		if strings.Contains(cmd, " configmap ") {
+			return "v1/ConfigMap", "get"
+		}
+		if strings.Contains(cmd, " secret ") {
+			return "v1/Secret", "get"
+		}
+		if strings.Contains(cmd, " ingress ") {
+			return "networking.k8s.io/v1/Ingress", "get"
+		}
+	}
+
+	// kubectl/oc delete patterns
+	if strings.Contains(cmd, " delete ") {
+		if strings.Contains(cmd, " pod ") || strings.Contains(cmd, " pods ") {
+			return "v1/Pod", "delete"
+		}
+		if strings.Contains(cmd, " service ") || strings.Contains(cmd, " svc ") {
+			return "v1/Service", "delete"
+		}
+		if strings.Contains(cmd, " deployment ") || strings.Contains(cmd, " deploy ") {
+			return "apps/v1/Deployment", "delete"
+		}
+		if strings.Contains(cmd, " route ") {
+			return "route.openshift.io/v1/Route", "delete"
+		}
+		if strings.Contains(cmd, " namespace ") || strings.Contains(cmd, " ns ") {
+			return "v1/Namespace", "delete"
+		}
+		if strings.Contains(cmd, " configmap ") {
+			return "v1/ConfigMap", "delete"
+		}
+		if strings.Contains(cmd, " secret ") {
+			return "v1/Secret", "delete"
+		}
+		if strings.Contains(cmd, " ingress ") {
+			return "networking.k8s.io/v1/Ingress", "delete"
+		}
+	}
+
+	// kubectl/oc patch patterns
+	if strings.Contains(cmd, " patch ") {
+		if strings.Contains(cmd, " pod ") || strings.Contains(cmd, " pods ") {
+			return "v1/Pod", "patch"
+		}
+		if strings.Contains(cmd, " service ") || strings.Contains(cmd, " svc ") {
+			return "v1/Service", "patch"
+		}
+		if strings.Contains(cmd, " deployment ") || strings.Contains(cmd, " deploy ") {
+			return "apps/v1/Deployment", "patch"
+		}
+		if strings.Contains(cmd, " route ") {
+			return "route.openshift.io/v1/Route", "patch"
+		}
+		if strings.Contains(cmd, " namespace ") || strings.Contains(cmd, " ns ") {
+			return "v1/Namespace", "patch"
+		}
+		if strings.Contains(cmd, " configmap ") {
+			return "v1/ConfigMap", "patch"
+		}
+		if strings.Contains(cmd, " secret ") {
+			return "v1/Secret", "patch"
+		}
+		if strings.Contains(cmd, " ingress ") {
+			return "networking.k8s.io/v1/Ingress", "patch"
+		}
+	}
+
+	// kubectl/oc apply patterns
+	if strings.Contains(cmd, " apply ") {
+		// Apply is more generic, could be any resource
+		// We'll need to parse the YAML/JSON to determine the resource type
+		// For now, return a generic mapping
+		return "unknown/unknown", "apply"
+	}
+
+	return "", ""
+}
+
 func main() {
 	root := flag.String("root", ".", "root of the Go repo to scan")
 	flag.Parse()
@@ -364,7 +489,6 @@ func main() {
 			verbs := map[string]bool{}
 			gvkSet := map[string]bool{}
 			expectationsSet := map[string]bool{}
-			externalsSet := map[string]bool{}
 
 			// Analyze the entire file for patterns
 			ast.Inspect(f, func(n ast.Node) bool {
@@ -398,10 +522,17 @@ func main() {
 						}
 					}
 
-					// Check for external commands
+					// Check for external commands and map to API operations
 					if exts := detectExternals(x); len(exts) > 0 {
 						for _, ext := range exts {
-							externalsSet[ext] = true
+							// Map external command to equivalent API operation
+							if gvk, verb := mapCommandToAPI(ext); gvk != "" && verb != "" {
+								gvkSet[gvk] = true
+								verbs[verb] = true
+								if strings.Contains(gvk, "openshift") || strings.Contains(gvk, "route.openshift.io") {
+									openshiftSet[gvk] = true
+								}
+							}
 						}
 					}
 
@@ -464,11 +595,6 @@ func main() {
 						"condition": parts[1],
 					})
 				}
-			}
-
-			// Add externals
-			for ext := range externalsSet {
-				spec.Externals = append(spec.Externals, ext)
 			}
 
 			// Add equivalence bridges
@@ -536,7 +662,7 @@ func main() {
 			verbs := map[string]bool{}
 			hasGinkgoPatterns := false
 			expectationsSet := map[string]bool{}
-			externalsSet := map[string]bool{}
+			gvkSet := map[string]bool{}
 
 			ast.Inspect(fd, func(n2 ast.Node) bool {
 				switch x := n2.(type) {
@@ -572,10 +698,17 @@ func main() {
 						}
 					}
 
-					// Check for external commands
+					// Check for external commands and map to API operations
 					if exts := detectExternals(x); len(exts) > 0 {
 						for _, ext := range exts {
-							externalsSet[ext] = true
+							// Map external command to equivalent API operation
+							if gvk, verb := mapCommandToAPI(ext); gvk != "" && verb != "" {
+								gvkSet[gvk] = true
+								verbs[verb] = true
+								if strings.Contains(gvk, "openshift") || strings.Contains(gvk, "route.openshift.io") {
+									openshiftSet[gvk] = true
+								}
+							}
 						}
 					}
 
@@ -619,6 +752,11 @@ func main() {
 				return true
 			})
 
+			// Add unique GVKs to actions
+			for gvk := range gvkSet {
+				spec.Actions = append(spec.Actions, Action{GVK: gvk})
+			}
+
 			for v := range verbs {
 				spec.Actions = append(spec.Actions, Action{Verb: strings.ToLower(v)})
 			}
@@ -635,11 +773,6 @@ func main() {
 						"condition": parts[1],
 					})
 				}
-			}
-
-			// Add externals
-			for ext := range externalsSet {
-				spec.Externals = append(spec.Externals, ext)
 			}
 
 			// Determine test level
