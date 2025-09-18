@@ -18,6 +18,20 @@ SCC_CLI_PATTERNS = [
     "oc adm policy add-scc-to-group",
 ]
 
+# Purpose detection patterns - keywords that indicate test purpose
+PURPOSE_PATTERNS = {
+    "NETWORK_CONNECTIVITY": ["curl", "url", "frr", "routing", "connectivity", "reach", "ping", "network", "traffic"],
+    "POD_HEALTH": ["pods", "status", "running", "phase", "health", "ready", "condition", "state"],
+    "POD_MANAGEMENT": ["create", "delete", "update", "pod", "deployment", "replica", "scale"],
+    "NETWORK_POLICY": ["policy", "network", "multinetwork", "ingress", "egress", "security"],
+    "RESOURCE_VALIDATION": ["count", "exist", "validation", "verify", "check", "assert"],
+    "OPERATOR_MANAGEMENT": ["operator", "subscription", "csv", "catalogsource", "installplan"],
+    "STORAGE_TESTING": ["storage", "volume", "pvc", "pv", "mount", "filesystem"],
+    "SECURITY_TESTING": ["security", "rbac", "scc", "psa", "permission", "access"],
+    "CONFIGURATION": ["config", "configuration", "settings", "parameters", "env"],
+    "PERFORMANCE": ["performance", "load", "stress", "benchmark", "latency", "throughput"],
+}
+
 
 def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
     """Extract meaningful expectation information from assert statements"""
@@ -110,6 +124,7 @@ class TestVisitor(ast.NodeVisitor):
             "openshift_specific": [],
             "concurrency": [],
             "artifacts": [],
+            "purpose": "",
         }
         for dec in node.decorator_list:
             if (
@@ -261,6 +276,10 @@ class TestVisitor(ast.NodeVisitor):
                 bridges.add("equiv:scc~psa")
         for b in sorted(bridges):
             spec["preconditions"].append(b)
+
+        # Detect purpose based on test content
+        docstring = ast.get_docstring(node) or ""
+        spec["purpose"] = detect_purpose(node.name, docstring, spec["actions"], spec["expectations"])
 
         self.specs.append(spec)
 
@@ -417,6 +436,103 @@ def api_to_group_version(api: str):
     if "networkingv1" in m:
         return ("networking.k8s.io", "v1")
     return ("", "")
+
+
+def detect_purpose(test_name: str, docstring: str, actions: list, expectations: list) -> str:
+    """Analyze test content to determine its purpose"""
+    # Combine all text content for analysis
+    content = test_name.lower()
+    if docstring:
+        content += " " + docstring.lower()
+    
+    for action in actions:
+        if isinstance(action, dict):
+            gvk = action.get("gvk", "")
+            verb = action.get("verb", "")
+            if gvk:
+                content += " " + gvk.lower()
+            if verb:
+                content += " " + verb.lower()
+    
+    for exp in expectations:
+        if isinstance(exp, dict):
+            condition = exp.get("condition", "")
+            if condition:
+                content += " " + condition.lower()
+    
+    # Score each purpose category based on keyword matches
+    scores = {}
+    for purpose, keywords in PURPOSE_PATTERNS.items():
+        score = 0
+        for keyword in keywords:
+            if keyword in content:
+                score += 1
+        scores[purpose] = score
+    
+    # Find the purpose with the highest score
+    max_score = 0
+    detected_purpose = "UNKNOWN"
+    for purpose, score in scores.items():
+        if score > max_score:
+            max_score = score
+            detected_purpose = purpose
+    
+    # If no keywords matched, try to infer from operations
+    if max_score == 0:
+        detected_purpose = infer_purpose_from_operations(actions)
+    
+    return detected_purpose
+
+
+def infer_purpose_from_operations(actions: list) -> str:
+    """Try to infer purpose from the types of operations performed"""
+    pod_ops = 0
+    network_ops = 0
+    storage_ops = 0
+    operator_ops = 0
+    has_create_delete_update = False
+    has_get_list = False
+    
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+            
+        gvk = action.get("gvk", "").lower()
+        verb = action.get("verb", "").lower()
+        
+        # Count pod-related operations
+        if "pod" in gvk or "deployment" in gvk or "replicaset" in gvk:
+            pod_ops += 1
+            if verb in ["create", "delete", "update"]:
+                has_create_delete_update = True
+            if verb in ["get", "list"]:
+                has_get_list = True
+        
+        # Count network-related operations
+        if "network" in gvk or "service" in gvk or "ingress" in gvk or "route" in gvk:
+            network_ops += 1
+        
+        # Count storage-related operations
+        if "pvc" in gvk or "pv" in gvk or "storage" in gvk:
+            storage_ops += 1
+        
+        # Count operator-related operations
+        if "operator" in gvk or "subscription" in gvk or "csv" in gvk:
+            operator_ops += 1
+    
+    # Determine purpose based on operation counts
+    if pod_ops > 0 and has_create_delete_update:
+        return "POD_MANAGEMENT"
+    if pod_ops > 0 and has_get_list:
+        return "POD_HEALTH"
+    if network_ops > 0:
+        return "NETWORK_POLICY"
+    if storage_ops > 0:
+        return "STORAGE_TESTING"
+    if operator_ops > 0:
+        return "OPERATOR_MANAGEMENT"
+    
+    return "RESOURCE_VALIDATION"
 
 
 def main():

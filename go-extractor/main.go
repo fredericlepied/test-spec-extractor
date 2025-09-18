@@ -34,6 +34,7 @@ type KubeSpec struct {
 	OpenShiftSpecific []string            `json:"openshift_specific"`
 	Concurrency       []string            `json:"concurrency"`
 	Artifacts         []string            `json:"artifacts"`
+	Purpose           string              `json:"purpose"`
 }
 
 var (
@@ -157,6 +158,20 @@ var (
 		"findClusterOperator":  {"config.openshift.io/v1/ClusterOperator", "get"},
 		"listClusterOperators": {"config.openshift.io/v1/ClusterOperator", "list"},
 	}
+
+	// Purpose detection patterns - keywords that indicate test purpose
+	purposePatterns = map[string][]string{
+		"NETWORK_CONNECTIVITY": {"curl", "url", "frr", "routing", "connectivity", "reach", "ping", "network", "traffic"},
+		"POD_HEALTH":           {"pods", "status", "running", "phase", "health", "ready", "condition", "state"},
+		"POD_MANAGEMENT":       {"create", "delete", "update", "pod", "deployment", "replica", "scale"},
+		"NETWORK_POLICY":       {"policy", "network", "multinetwork", "ingress", "egress", "security"},
+		"RESOURCE_VALIDATION":  {"count", "exist", "validation", "verify", "check", "assert"},
+		"OPERATOR_MANAGEMENT":  {"operator", "subscription", "csv", "catalogsource", "installplan"},
+		"STORAGE_TESTING":      {"storage", "volume", "pvc", "pv", "mount", "filesystem"},
+		"SECURITY_TESTING":     {"security", "rbac", "scc", "psa", "permission", "access"},
+		"CONFIGURATION":        {"config", "configuration", "settings", "parameters", "env"},
+		"PERFORMANCE":          {"performance", "load", "stress", "benchmark", "latency", "throughput"},
+	}
 )
 
 func aliasToGroup(alias string) (group, version string) {
@@ -254,6 +269,114 @@ func detectHelperFunctionPattern(call *ast.CallExpr) (gvk string, verb string) {
 		}
 	}
 	return "", ""
+}
+
+// detectPurpose analyzes test content to determine its purpose
+func detectPurpose(testName string, comments []string, actions []Action, expectations []map[string]string) string {
+	// Combine all text content for analysis
+	content := strings.ToLower(testName)
+	for _, comment := range comments {
+		content += " " + strings.ToLower(comment)
+	}
+	for _, action := range actions {
+		if action.GVK != "" {
+			content += " " + strings.ToLower(action.GVK)
+		}
+		if action.Verb != "" {
+			content += " " + strings.ToLower(action.Verb)
+		}
+	}
+	for _, exp := range expectations {
+		if condition, ok := exp["condition"]; ok {
+			content += " " + strings.ToLower(condition)
+		}
+	}
+
+	// Score each purpose category based on keyword matches
+	scores := make(map[string]int)
+	for purpose, keywords := range purposePatterns {
+		score := 0
+		for _, keyword := range keywords {
+			if strings.Contains(content, keyword) {
+				score++
+			}
+		}
+		scores[purpose] = score
+	}
+
+	// Find the purpose with the highest score
+	maxScore := 0
+	detectedPurpose := "UNKNOWN"
+	for purpose, score := range scores {
+		if score > maxScore {
+			maxScore = score
+			detectedPurpose = purpose
+		}
+	}
+
+	// If no keywords matched, try to infer from operations
+	if maxScore == 0 {
+		detectedPurpose = inferPurposeFromOperations(actions)
+	}
+
+	return detectedPurpose
+}
+
+// inferPurposeFromOperations tries to infer purpose from the types of operations performed
+func inferPurposeFromOperations(actions []Action) string {
+	podOps := 0
+	networkOps := 0
+	storageOps := 0
+	operatorOps := 0
+	hasCreateDeleteUpdate := false
+	hasGetList := false
+
+	for _, action := range actions {
+		gvk := strings.ToLower(action.GVK)
+		verb := strings.ToLower(action.Verb)
+
+		// Count pod-related operations
+		if strings.Contains(gvk, "pod") || strings.Contains(gvk, "deployment") || strings.Contains(gvk, "replicaset") {
+			podOps++
+			if verb == "create" || verb == "delete" || verb == "update" {
+				hasCreateDeleteUpdate = true
+			}
+			if verb == "get" || verb == "list" {
+				hasGetList = true
+			}
+		}
+		// Count network-related operations
+		if strings.Contains(gvk, "network") || strings.Contains(gvk, "service") || strings.Contains(gvk, "ingress") || strings.Contains(gvk, "route") {
+			networkOps++
+		}
+		// Count storage-related operations
+		if strings.Contains(gvk, "pvc") || strings.Contains(gvk, "pv") || strings.Contains(gvk, "storage") {
+			storageOps++
+		}
+		// Count operator-related operations
+		if strings.Contains(gvk, "operator") || strings.Contains(gvk, "subscription") || strings.Contains(gvk, "csv") {
+			operatorOps++
+		}
+	}
+
+	// Determine purpose based on operation counts
+	if podOps > 0 && hasCreateDeleteUpdate {
+		return "POD_MANAGEMENT"
+	}
+	if podOps > 0 && hasGetList {
+		return "POD_HEALTH"
+	}
+	if networkOps > 0 {
+		return "NETWORK_POLICY"
+	}
+	if storageOps > 0 {
+		return "STORAGE_TESTING"
+	}
+	if operatorOps > 0 {
+		return "OPERATOR_MANAGEMENT"
+	}
+
+	return "RESOURCE_VALIDATION"
 }
 
 // analyzeFunctionCalls looks deeper into function calls to find Kubernetes operations
@@ -980,6 +1103,10 @@ func main() {
 
 			// Only output if we found meaningful patterns
 			if len(spec.Actions) > 0 || len(spec.OpenShiftSpecific) > 0 || len(spec.Preconditions) > 0 {
+				// Detect purpose based on test content
+				comments := []string{} // TODO: Extract comments from AST
+				spec.Purpose = detectPurpose(spec.TestID, comments, spec.Actions, spec.Expectations)
+
 				b, _ := json.Marshal(spec)
 				fmt.Fprintln(out, string(b))
 			}
@@ -1225,6 +1352,10 @@ func main() {
 			for k := range bridges {
 				spec.Preconditions = append(spec.Preconditions, k)
 			}
+
+			// Detect purpose based on test content
+			comments := []string{} // TODO: Extract comments from AST
+			spec.Purpose = detectPurpose(spec.TestID, comments, spec.Actions, spec.Expectations)
 
 			b, _ := json.Marshal(spec)
 			fmt.Fprintln(out, string(b))

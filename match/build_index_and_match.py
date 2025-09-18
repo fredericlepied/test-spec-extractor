@@ -21,6 +21,172 @@ VERB_GROUPS = {
     'delete_operations': ['delete'],
 }
 
+# Purpose compatibility matrix - defines which purposes can match
+# Made more restrictive to reduce false positives
+PURPOSE_COMPATIBILITY = {
+    'POD_MANAGEMENT': ['POD_HEALTH'],  # Only direct pod-related purposes
+    'POD_HEALTH': ['POD_MANAGEMENT'],  # Only direct pod-related purposes
+    'NETWORK_POLICY': ['NETWORK_CONNECTIVITY'],  # Only network-related purposes
+    'NETWORK_CONNECTIVITY': ['NETWORK_POLICY'],  # Only network-related purposes
+    'OPERATOR_MANAGEMENT': ['RESOURCE_VALIDATION'],  # Only with resource validation
+    'STORAGE_TESTING': ['RESOURCE_VALIDATION'],  # Only with resource validation
+    'SECURITY_TESTING': ['RESOURCE_VALIDATION'],  # Only with resource validation
+    'CONFIGURATION': ['RESOURCE_VALIDATION'],  # Only with resource validation
+    'PERFORMANCE': ['RESOURCE_VALIDATION'],  # Only with resource validation
+    'RESOURCE_VALIDATION': ['OPERATOR_MANAGEMENT', 'STORAGE_TESTING', 'SECURITY_TESTING', 'CONFIGURATION', 'PERFORMANCE'],  # Removed network and pod purposes
+    'UNKNOWN': ['POD_MANAGEMENT', 'POD_HEALTH', 'NETWORK_POLICY', 'NETWORK_CONNECTIVITY', 'OPERATOR_MANAGEMENT', 'STORAGE_TESTING', 'SECURITY_TESTING', 'CONFIGURATION', 'PERFORMANCE', 'RESOURCE_VALIDATION'],
+}
+
+def is_purpose_compatible(purpose_a: str, purpose_b: str) -> bool:
+    """Check if two test purposes are compatible for matching."""
+    if not purpose_a or not purpose_b:
+        return True  # Allow matches if purpose is unknown
+    
+    # Same purpose is always compatible
+    if purpose_a == purpose_b:
+        return True
+    
+    # Check compatibility matrix
+    compatible_purposes = PURPOSE_COMPATIBILITY.get(purpose_a, [])
+    return purpose_b in compatible_purposes
+
+
+def calculate_functional_similarity(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> float:
+    """Calculate functional similarity score based on test functionality overlap."""
+    actions_a = spec_a.get('actions') or []
+    actions_b = spec_b.get('actions') or []
+    expectations_a = spec_a.get('expectations') or []
+    expectations_b = spec_b.get('expectations') or []
+    
+    if not actions_a or not actions_b:
+        return 0.0
+    
+    # Extract operations and expectations
+    operations_a = set()
+    operations_b = set()
+    expectations_set_a = set()
+    expectations_set_b = set()
+    
+    for action in actions_a:
+        gvk = action.get('gvk', '')
+        verb = action.get('verb', '')
+        if gvk and verb:
+            operations_a.add(f"{gvk}:{verb}")
+    
+    for action in actions_b:
+        gvk = action.get('gvk', '')
+        verb = action.get('verb', '')
+        if gvk and verb:
+            operations_b.add(f"{gvk}:{verb}")
+    
+    for exp in expectations_a:
+        if isinstance(exp, dict):
+            target = exp.get('target', '')
+            condition = exp.get('condition', '')
+            if target and condition:
+                expectations_set_a.add(f"{target}:{condition}")
+    
+    for exp in expectations_b:
+        if isinstance(exp, dict):
+            target = exp.get('target', '')
+            condition = exp.get('condition', '')
+            if target and condition:
+                expectations_set_b.add(f"{target}:{condition}")
+    
+    # Calculate similarity scores
+    exact_ops = operations_a & operations_b
+    category_ops = set()
+    resource_ops = set()
+    
+    # Category-level operations
+    for action in actions_a:
+        gvk = action.get('gvk', '')
+        verb = action.get('verb', '')
+        if gvk and verb:
+            for cat, verbs in OPERATION_CATEGORIES.items():
+                if verb in verbs:
+                    category_ops.add(f"{gvk}:{cat}")
+                    break
+    
+    for action in actions_b:
+        gvk = action.get('gvk', '')
+        verb = action.get('verb', '')
+        if gvk and verb:
+            for cat, verbs in OPERATION_CATEGORIES.items():
+                if verb in verbs:
+                    category_ops.add(f"{gvk}:{cat}")
+                    break
+    
+    category_matches = set()
+    for cat_a in category_ops:
+        for cat_b in category_ops:
+            if cat_a == cat_b:
+                category_matches.add(cat_a)
+    
+    # Resource-level operations
+    resources_a = set()
+    resources_b = set()
+    for action in actions_a:
+        gvk = action.get('gvk', '')
+        if gvk:
+            resources_a.add(gvk)
+    
+    for action in actions_b:
+        gvk = action.get('gvk', '')
+        if gvk:
+            resources_b.add(gvk)
+    
+    resource_matches = resources_a & resources_b
+    
+    # Calculate weighted similarity score
+    exact_score = len(exact_ops) * 1.0
+    category_score = len(category_matches) * 0.7
+    resource_score = len(resource_matches) * 0.3
+    expectation_score = len(expectations_set_a & expectations_set_b) * 0.5
+    
+    total_ops = len(operations_a | operations_b)
+    total_expectations = len(expectations_set_a | expectations_set_b)
+    
+    if total_ops == 0:
+        return 0.0
+    
+    functional_score = (exact_score + category_score + resource_score) / total_ops
+    if total_expectations > 0:
+        functional_score += expectation_score / total_expectations * 0.2
+    
+    return min(1.0, functional_score)
+
+
+def has_meaningful_operations(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> bool:
+    """Check if two specs have meaningful operational overlap beyond just resource-level similarity."""
+    functional_score = calculate_functional_similarity(spec_a, spec_b)
+    return functional_score > 0.3  # Threshold for meaningful operations
+
+
+def filter_by_purpose_compatibility(matches: List[Dict[str, Any]], specs_a: List[Dict[str, Any]], specs_b: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter matches based on purpose compatibility and meaningful operations."""
+    filtered = []
+    for match in matches:
+        idx_a = match['idx_a']
+        idx_b = match['idx_b']
+        
+        purpose_a = specs_a[idx_a].get('purpose', '')
+        purpose_b = specs_b[idx_b].get('purpose', '')
+        
+        # Check purpose compatibility
+        if not is_purpose_compatible(purpose_a, purpose_b):
+            continue
+        
+        # For high-similarity matches, also check for meaningful operations
+        if match.get('base_score', 0) > 0.7:  # High similarity threshold
+            if not has_meaningful_operations(specs_a[idx_a], specs_b[idx_b]):
+                continue
+        
+        filtered.append(match)
+    
+    return filtered
+
+
 def load_specs(path: str) -> List[Dict[str, Any]]:
     specs = []
     with open(path, 'r', encoding='utf-8') as f:
@@ -284,8 +450,26 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
             # Calculate shared signals
             shared = shared_signals(specs_a[i], specs_b[j])
             
-            # Enhanced scoring based on different types of shared signals
+            # Enhanced scoring based on different types of shared signals, purpose compatibility, and functional similarity
             boosted_score = float(sc)
+            
+            # Purpose-based scoring
+            purpose_a = specs_a[i].get('purpose', '')
+            purpose_b = specs_b[j].get('purpose', '')
+            purpose_boost = 0.0
+            
+            if purpose_a and purpose_b:
+                if purpose_a == purpose_b:
+                    purpose_boost = 0.20  # Same purpose gets significant boost
+                elif is_purpose_compatible(purpose_a, purpose_b):
+                    purpose_boost = 0.10  # Compatible purposes get moderate boost
+                else:
+                    purpose_boost = -0.30  # Incompatible purposes get penalty
+            
+            # Functional similarity scoring
+            functional_score = calculate_functional_similarity(specs_a[i], specs_b[j])
+            functional_boost = functional_score * 0.25  # Boost based on functional similarity
+            
             if shared:
                 # Count different types of shared signals
                 exact_count = len([s for s in shared.split(';') if s.startswith('exact:')])
@@ -294,17 +478,19 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
                 verb_group_count = len([s for s in shared.split(';') if s.startswith('verb_group:')])
                 
                 # Boost based on signal types (exact > category > verb_group > resource)
-                boost = 0.0
+                signal_boost = 0.0
                 if exact_count > 0:
-                    boost += 0.15 * exact_count  # Highest boost for exact matches
+                    signal_boost += 0.15 * exact_count  # Highest boost for exact matches
                 if category_count > 0:
-                    boost += 0.12 * category_count  # High boost for category matches
+                    signal_boost += 0.12 * category_count  # High boost for category matches
                 if verb_group_count > 0:
-                    boost += 0.10 * verb_group_count  # Medium boost for verb group matches
+                    signal_boost += 0.10 * verb_group_count  # Medium boost for verb group matches
                 if resource_count > 0:
-                    boost += 0.08 * resource_count  # Lower boost for resource matches
+                    signal_boost += 0.08 * resource_count  # Lower boost for resource matches
                 
-                boosted_score = min(1.0, float(sc) + boost)
+                boosted_score = min(1.0, float(sc) + signal_boost + purpose_boost + functional_boost)
+            else:
+                boosted_score = min(1.0, max(0.0, float(sc) + purpose_boost + functional_boost))
             
             pairs.append({
                 'idx_a': i, 'idx_b': int(j), 'base_score': float(sc),
@@ -315,8 +501,8 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
             })
     return pairs
 
-def validate_high_similarity_matches(pairs, threshold=0.8):
-    """Validate that high-similarity matches actually share operations."""
+def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
+    """Validate that high-similarity matches actually share operations and compatible purposes."""
     high_sim_matches = [p for p in pairs if p['base_score'] >= threshold]
     shared_ops_matches = [p for p in high_sim_matches if p['shared_signals']]
     
@@ -326,16 +512,48 @@ def validate_high_similarity_matches(pairs, threshold=0.8):
     category_matches = [p for p in high_sim_matches if any(s.startswith('category:') for s in p['shared_signals'].split(';'))]
     verb_group_matches = [p for p in high_sim_matches if any(s.startswith('verb_group:') for s in p['shared_signals'].split(';'))]
     
+    # Count purpose compatibility and functional similarity
+    purpose_compatible_matches = []
+    purpose_same_matches = []
+    functional_matches = []
+    for p in high_sim_matches:
+        idx_a = p['idx_a']
+        idx_b = p['idx_b']
+        
+        # Check bounds to avoid index errors
+        if idx_a >= len(specs_a) or idx_b >= len(specs_b):
+            continue
+            
+        purpose_a = specs_a[idx_a].get('purpose', '')
+        purpose_b = specs_b[idx_b].get('purpose', '')
+        if purpose_a and purpose_b:
+            if purpose_a == purpose_b:
+                purpose_same_matches.append(p)
+            elif is_purpose_compatible(purpose_a, purpose_b):
+                purpose_compatible_matches.append(p)
+        
+        # Check functional similarity
+        functional_score = calculate_functional_similarity(specs_a[idx_a], specs_b[idx_b])
+        if functional_score > 0.3:  # Threshold for meaningful functional similarity
+            functional_matches.append(p)
+    
     print(f"High similarity matches (>{threshold}): {len(high_sim_matches)}")
     print(f"  - Exact operation matches: {len(exact_matches)}")
     print(f"  - Resource-level matches: {len(resource_matches)}")
     print(f"  - Category-level matches: {len(category_matches)}")
     print(f"  - Verb group matches: {len(verb_group_matches)}")
     print(f"  - Any shared signals: {len(shared_ops_matches)}")
+    print(f"  - Same purpose: {len(purpose_same_matches)}")
+    print(f"  - Compatible purpose: {len(purpose_compatible_matches)}")
+    print(f"  - Functional similarity: {len(functional_matches)}")
     
     if len(high_sim_matches) > 0:
         validation_rate = len(shared_ops_matches)/len(high_sim_matches)*100
-        print(f"Validation rate: {validation_rate:.1f}%")
+        purpose_rate = (len(purpose_same_matches) + len(purpose_compatible_matches))/len(high_sim_matches)*100
+        functional_rate = len(functional_matches)/len(high_sim_matches)*100
+        print(f"Operation validation rate: {validation_rate:.1f}%")
+        print(f"Purpose compatibility rate: {purpose_rate:.1f}%")
+        print(f"Functional similarity rate: {functional_rate:.1f}%")
         
         if validation_rate < 50:
             print(f"⚠️  {len(high_sim_matches) - len(shared_ops_matches)} high-similarity matches lack shared operations!")
@@ -345,7 +563,7 @@ def validate_high_similarity_matches(pairs, threshold=0.8):
     
     return shared_ops_matches
 
-def write_report(pairs_ab, pairs_ba, out_csv):
+def write_report(pairs_ab, pairs_ba, go_specs, py_specs, out_csv):
     import pandas as pd
     df = pd.DataFrame(pairs_ab + pairs_ba)
     score_col = 'blended_score' if 'blended_score' in df.columns else 'base_score'
@@ -353,7 +571,7 @@ def write_report(pairs_ab, pairs_ba, out_csv):
     
     # Validate high similarity matches
     print("\n=== VALIDATION RESULTS ===")
-    validate_high_similarity_matches(pairs_ab + pairs_ba)
+    validate_high_similarity_matches(pairs_ab + pairs_ba, go_specs, py_specs)
     
     df.to_csv(out_csv, index=False)
     print(f"Wrote {out_csv} ({len(df)} rows)")
@@ -403,6 +621,12 @@ def main():
     pairs_ab = cross_match(go_specs, go_embs, py_specs, py_embs, topk=5)
     pairs_ba = cross_match(py_specs, py_embs, go_specs, go_embs, topk=5)
 
+    # Apply purpose-based filtering to reduce false positives
+    print(f"Before purpose filtering: {len(pairs_ab)} A->B matches, {len(pairs_ba)} B->A matches")
+    pairs_ab = filter_by_purpose_compatibility(pairs_ab, go_specs, py_specs)
+    pairs_ba = filter_by_purpose_compatibility(pairs_ba, py_specs, go_specs)
+    print(f"After purpose filtering: {len(pairs_ab)} A->B matches, {len(pairs_ba)} B->A matches")
+
     if args.llm:
         from llm_rerank import rerank_batch
         print('Re-ranking A->B with LLM...')
@@ -410,7 +634,7 @@ def main():
         print('Re-ranking B->A with LLM...')
         pairs_ba = rerank_batch(pairs_ba, py_specs, go_specs)
 
-    write_report(pairs_ab, pairs_ba, args.out)
+    write_report(pairs_ab, pairs_ba, go_specs, py_specs, args.out)
 
     df_go = coverage_matrix(go_specs, 'go')
     df_py = coverage_matrix(py_specs, 'py')
