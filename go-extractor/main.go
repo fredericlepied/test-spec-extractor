@@ -74,6 +74,27 @@ var (
 		"namespace.List":       "v1/Namespace",
 		"clusterversion.Pull":  "config.openshift.io/v1/ClusterVersion",
 		"clusteroperator.List": "config.openshift.io/v1/ClusterOperator",
+		// Additional patterns for helper functions
+		"pods.List":              "v1/Pod",
+		"pods.Pull":              "v1/Pod",
+		"pods.NewBuilder":        "v1/Pod",
+		"namespaces.List":        "v1/Namespace",
+		"namespaces.Pull":        "v1/Namespace",
+		"namespaces.NewBuilder":  "v1/Namespace",
+		"deployments.List":       "apps/v1/Deployment",
+		"deployments.Pull":       "apps/v1/Deployment",
+		"deployments.NewBuilder": "apps/v1/Deployment",
+		"services.List":          "v1/Service",
+		"services.Pull":          "v1/Service",
+		"services.NewBuilder":    "v1/Service",
+		"routes.List":            "route.openshift.io/v1/Route",
+		"routes.Pull":            "route.openshift.io/v1/Route",
+		"routes.NewBuilder":      "route.openshift.io/v1/Route",
+		"nodes.Pull":             "v1/Node",
+		"nodes.NewBuilder":       "v1/Node",
+		"clusterversions.List":   "config.openshift.io/v1/ClusterVersion",
+		"clusteroperators.List":  "config.openshift.io/v1/ClusterOperator",
+		"clusteroperators.Pull":  "config.openshift.io/v1/ClusterOperator",
 	}
 
 	// Kubernetes API type patterns
@@ -86,6 +107,55 @@ var (
 		"routev1.":      "route.openshift.io/v1/",
 		"securityv1.":   "security.openshift.io/v1/",
 		"metav1.":       "meta/v1/",
+	}
+
+	// Helper function patterns - common function names that perform Kubernetes operations
+	helperFunctionPatterns = map[string]struct {
+		GVK  string
+		Verb string
+	}{
+		"findPodWithSelector":  {"v1/Pod", "list"},
+		"getActivePods":        {"v1/Pod", "list"},
+		"getPodsInNamespace":   {"v1/Pod", "list"},
+		"listPods":             {"v1/Pod", "list"},
+		"findPods":             {"v1/Pod", "list"},
+		"getPodList":           {"v1/Pod", "list"},
+		"getPodByName":         {"v1/Pod", "get"},
+		"getPod":               {"v1/Pod", "get"},
+		"findPod":              {"v1/Pod", "get"},
+		"createPod":            {"v1/Pod", "create"},
+		"deletePod":            {"v1/Pod", "delete"},
+		"updatePod":            {"v1/Pod", "update"},
+		"patchPod":             {"v1/Pod", "patch"},
+		"getNamespace":         {"v1/Namespace", "get"},
+		"findNamespace":        {"v1/Namespace", "get"},
+		"createNamespace":      {"v1/Namespace", "create"},
+		"deleteNamespace":      {"v1/Namespace", "delete"},
+		"listNamespaces":       {"v1/Namespace", "list"},
+		"getDeployment":        {"apps/v1/Deployment", "get"},
+		"findDeployment":       {"apps/v1/Deployment", "get"},
+		"createDeployment":     {"apps/v1/Deployment", "create"},
+		"deleteDeployment":     {"apps/v1/Deployment", "delete"},
+		"listDeployments":      {"apps/v1/Deployment", "list"},
+		"getService":           {"v1/Service", "get"},
+		"findService":          {"v1/Service", "get"},
+		"createService":        {"v1/Service", "create"},
+		"deleteService":        {"v1/Service", "delete"},
+		"listServices":         {"v1/Service", "list"},
+		"getRoute":             {"route.openshift.io/v1/Route", "get"},
+		"findRoute":            {"route.openshift.io/v1/Route", "get"},
+		"createRoute":          {"route.openshift.io/v1/Route", "create"},
+		"deleteRoute":          {"route.openshift.io/v1/Route", "delete"},
+		"listRoutes":           {"route.openshift.io/v1/Route", "list"},
+		"getNode":              {"v1/Node", "get"},
+		"findNode":             {"v1/Node", "get"},
+		"listNodes":            {"v1/Node", "list"},
+		"getClusterVersion":    {"config.openshift.io/v1/ClusterVersion", "get"},
+		"findClusterVersion":   {"config.openshift.io/v1/ClusterVersion", "get"},
+		"listClusterVersions":  {"config.openshift.io/v1/ClusterVersion", "list"},
+		"getClusterOperator":   {"config.openshift.io/v1/ClusterOperator", "get"},
+		"findClusterOperator":  {"config.openshift.io/v1/ClusterOperator", "get"},
+		"listClusterOperators": {"config.openshift.io/v1/ClusterOperator", "list"},
 	}
 )
 
@@ -174,6 +244,57 @@ func collectPSALabels(m ast.Expr) (labels []string) {
 		}
 	}
 	return
+}
+
+// detectHelperFunctionPattern detects helper function calls that perform Kubernetes operations
+func detectHelperFunctionPattern(call *ast.CallExpr) (gvk string, verb string) {
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		if pattern, exists := helperFunctionPatterns[ident.Name]; exists {
+			return pattern.GVK, pattern.Verb
+		}
+	}
+	return "", ""
+}
+
+// analyzeFunctionCalls looks deeper into function calls to find Kubernetes operations
+func analyzeFunctionCalls(node ast.Node) (gvks []string, verbs []string) {
+	var foundGVKs []string
+	var foundVerbs []string
+
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			// Check for eco-goinfra patterns
+			if gvk, verb := detectEcoGoinfraPattern(x); gvk != "" || verb != "" {
+				if gvk != "" {
+					foundGVKs = append(foundGVKs, gvk)
+				}
+				if verb != "" {
+					foundVerbs = append(foundVerbs, verb)
+				}
+			}
+
+			// Check for helper function patterns
+			if gvk, verb := detectHelperFunctionPattern(x); gvk != "" || verb != "" {
+				if gvk != "" {
+					foundGVKs = append(foundGVKs, gvk)
+				}
+				if verb != "" {
+					foundVerbs = append(foundVerbs, verb)
+				}
+			}
+
+			// Check for standard Kubernetes API calls
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+				if verbSet[sel.Sel.Name] {
+					foundVerbs = append(foundVerbs, sel.Sel.Name)
+				}
+			}
+		}
+		return true
+	})
+
+	return foundGVKs, foundVerbs
 }
 
 func detectEcoGoinfraPattern(call *ast.CallExpr) (gvk string, verb string) {
@@ -313,7 +434,14 @@ func isGinkgoTest(node ast.Node) bool {
 	case *ast.CallExpr:
 		if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
 			// Check for Ginkgo patterns like Describe, It, By
-			ginkgoPatterns := []string{"Describe", "It", "By", "Context", "BeforeAll", "AfterAll", "BeforeEach", "AfterEach"}
+			ginkgoPatterns := []string{
+				"Describe", "It", "By", "Context", "BeforeAll", "AfterAll",
+				"BeforeEach", "AfterEach", "JustBeforeEach", "JustAfterEach",
+				"Specify", "When", "Given", "Then", "And", "But",
+				"FDescribe", "FIt", "FContext", "FWhen", "FSpecify",
+				"PDescribe", "PIt", "PContext", "PWhen", "PSpecify",
+				"XDescribe", "XIt", "XContext", "XWhen", "XSpecify",
+			}
 			for _, pattern := range ginkgoPatterns {
 				if sel.Sel.Name == pattern {
 					return true
@@ -322,7 +450,14 @@ func isGinkgoTest(node ast.Node) bool {
 		}
 		// Also check for direct function calls like Describe(...)
 		if ident, ok := x.Fun.(*ast.Ident); ok {
-			ginkgoPatterns := []string{"Describe", "It", "By", "Context", "BeforeAll", "AfterAll", "BeforeEach", "AfterEach"}
+			ginkgoPatterns := []string{
+				"Describe", "It", "By", "Context", "BeforeAll", "AfterAll",
+				"BeforeEach", "AfterEach", "JustBeforeEach", "JustAfterEach",
+				"Specify", "When", "Given", "Then", "And", "But",
+				"FDescribe", "FIt", "FContext", "FWhen", "FSpecify",
+				"PDescribe", "PIt", "PContext", "PWhen", "PSpecify",
+				"XDescribe", "XIt", "XContext", "XWhen", "XSpecify",
+			}
 			for _, pattern := range ginkgoPatterns {
 				if ident.Name == pattern {
 					return true
@@ -784,14 +919,24 @@ func main() {
 				return true
 			})
 
-			// Add unique GVKs to actions
-			for gvk := range gvkSet {
-				spec.Actions = append(spec.Actions, Action{GVK: gvk})
-			}
-
-			// Add unique verbs to actions
-			for v := range verbs {
-				spec.Actions = append(spec.Actions, Action{Verb: strings.ToLower(v)})
+			// Combine GVKs and verbs into actions
+			// If we have both GVKs and verbs, create combinations
+			if len(gvkSet) > 0 && len(verbs) > 0 {
+				for gvk := range gvkSet {
+					for v := range verbs {
+						spec.Actions = append(spec.Actions, Action{GVK: gvk, Verb: strings.ToLower(v)})
+					}
+				}
+			} else if len(gvkSet) > 0 {
+				// Only GVKs, no verbs
+				for gvk := range gvkSet {
+					spec.Actions = append(spec.Actions, Action{GVK: gvk})
+				}
+			} else if len(verbs) > 0 {
+				// Only verbs, no GVKs
+				for v := range verbs {
+					spec.Actions = append(spec.Actions, Action{Verb: strings.ToLower(v)})
+				}
 			}
 
 			// Add OpenShift-specific resources
@@ -850,6 +995,32 @@ func main() {
 			// Check if it's a test function or contains Ginkgo patterns
 			isTestFunc := strings.HasPrefix(fd.Name.Name, "Test")
 			hasGinkgoInFunc := false
+			isHelperFunction := false
+
+			// Check for helper function patterns
+			helperPatterns := []string{
+				"get", "ensure", "create", "delete", "update", "verify", "check",
+				"setup", "teardown", "cleanup", "init", "prepare", "validate",
+				"find", "list", "pull", "push", "wait", "retry", "handle",
+				"process", "execute", "run", "start", "stop", "pause", "resume",
+				"connect", "disconnect", "send", "receive", "parse", "format",
+				"build", "compile", "deploy", "install", "uninstall", "configure",
+				"enable", "disable", "activate", "deactivate", "toggle", "switch",
+				"load", "save", "store", "fetch", "retrieve", "query", "search",
+				"filter", "sort", "merge", "split", "join", "combine", "separate",
+				"transform", "convert", "translate", "map", "reduce", "fold",
+				"generate", "produce", "create", "make", "build", "construct",
+				"destroy", "remove", "clear", "reset", "restore", "revert",
+			}
+
+			// Check if function name suggests it's a helper function
+			funcNameLower := strings.ToLower(fd.Name.Name)
+			for _, pattern := range helperPatterns {
+				if strings.HasPrefix(funcNameLower, pattern) || strings.Contains(funcNameLower, pattern) {
+					isHelperFunction = true
+					break
+				}
+			}
 
 			// Check if the function contains Ginkgo patterns
 			ast.Inspect(fd, func(n2 ast.Node) bool {
@@ -860,6 +1031,12 @@ func main() {
 				return true
 			})
 
+			// Skip if it's a helper function (unless it's a Test* function)
+			if isHelperFunction && !isTestFunc {
+				return true
+			}
+
+			// Skip if it's neither a test function nor contains Ginkgo patterns
 			if !isTestFunc && !hasGinkgoInFunc {
 				return true
 			}
@@ -923,7 +1100,7 @@ func main() {
 					if exts := detectExternals(x); len(exts) > 0 {
 						for _, ext := range exts {
 							// Map external command to equivalent API operation
-							if gvk, verb := mapCommandToAPI(ext); gvk != "" && verb != "" {
+							if gvk, verb := mapCommandToAPI(ext); gvk != "" || verb != "" {
 								gvkSet[gvk] = true
 								verbs[verb] = true
 								if strings.Contains(gvk, "openshift") || strings.Contains(gvk, "route.openshift.io") {
@@ -973,13 +1150,37 @@ func main() {
 				return true
 			})
 
-			// Add unique GVKs to actions
-			for gvk := range gvkSet {
-				spec.Actions = append(spec.Actions, Action{GVK: gvk})
+			// Perform deeper analysis to find Kubernetes operations in function calls
+			// This helps detect operations that are hidden in helper functions
+			deepGVKs, deepVerbs := analyzeFunctionCalls(fd)
+			for _, gvk := range deepGVKs {
+				gvkSet[gvk] = true
+				if strings.Contains(gvk, "openshift") || strings.Contains(gvk, "route.openshift.io") {
+					openshiftSet[gvk] = true
+				}
+			}
+			for _, verb := range deepVerbs {
+				verbs[verb] = true
 			}
 
-			for v := range verbs {
-				spec.Actions = append(spec.Actions, Action{Verb: strings.ToLower(v)})
+			// Combine GVKs and verbs into actions
+			// If we have both GVKs and verbs, create combinations
+			if len(gvkSet) > 0 && len(verbs) > 0 {
+				for gvk := range gvkSet {
+					for v := range verbs {
+						spec.Actions = append(spec.Actions, Action{GVK: gvk, Verb: strings.ToLower(v)})
+					}
+				}
+			} else if len(gvkSet) > 0 {
+				// Only GVKs, no verbs
+				for gvk := range gvkSet {
+					spec.Actions = append(spec.Actions, Action{GVK: gvk})
+				}
+			} else if len(verbs) > 0 {
+				// Only verbs, no GVKs
+				for v := range verbs {
+					spec.Actions = append(spec.Actions, Action{Verb: strings.ToLower(v)})
+				}
 			}
 			for k := range openshiftSet {
 				spec.OpenShiftSpecific = append(spec.OpenShiftSpecific, k)

@@ -298,6 +298,16 @@ if [[ -f "$OUTPUT_DIR/test_report.csv" ]]; then
     echo "Top 5 similarity matches:"
     head -6 "$OUTPUT_DIR/test_report.csv" | column -t -s',' -N "Go_Test,Python_Test,Score,Shared_Signals"
     echo
+    
+    # Show matches with shared signals
+    print_status "Matches with shared operations (first 5):"
+    matches_with_signals=$(grep -v ',$' "$OUTPUT_DIR/test_report.csv" | head -6)
+    if [[ -n "$matches_with_signals" ]]; then
+        echo "$matches_with_signals" | column -t -s',' -N "Go_Test,Python_Test,Score,Shared_Signals"
+    else
+        echo "No matches found with shared operations"
+    fi
+    echo
 fi
 
 # Step 8: Cleanup (optional)
