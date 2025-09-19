@@ -27,8 +27,9 @@ type Action struct {
 
 type KubeSpec struct {
 	TestID            string              `json:"test_id"`
-	Level             string              `json:"level"`
-	Preconditions     []string            `json:"preconditions"`
+	TestType          string              `json:"test_type"`
+	Dependencies      []string            `json:"dependencies"`
+	Environment       []string            `json:"environment"`
 	Actions           []Action            `json:"actions"`
 	Expectations      []map[string]string `json:"expectations"`
 	OpenShiftSpecific []string            `json:"openshift_specific"`
@@ -46,6 +47,34 @@ var (
 		"pod-security.kubernetes.io/audit",
 		"pod-security.kubernetes.io/warn",
 		"security.openshift.io/scc",
+	}
+
+	// Test type detection patterns
+	testTypePatterns = map[string][]string{
+		"unit":        {"test", "Test", "unit", "Unit", "mock", "Mock"},
+		"integration": {"integration", "Integration", "e2e", "E2E", "ginkgo", "Ginkgo", "suite", "Suite"},
+		"performance": {"performance", "Performance", "benchmark", "Benchmark", "load", "Load", "stress", "Stress"},
+		"conformance": {"conformance", "Conformance", "k8s", "K8s", "kubernetes", "Kubernetes"},
+	}
+
+	// Dependency detection patterns
+	dependencyPatterns = map[string][]string{
+		"operator":   {"operator", "Operator", "csv", "CSV", "subscription", "Subscription"},
+		"storage":    {"storage", "Storage", "pvc", "PVC", "pv", "PV", "volume", "Volume"},
+		"network":    {"network", "Network", "cni", "CNI", "multus", "Multus", "sriov", "SR-IOV"},
+		"security":   {"security", "Security", "rbac", "RBAC", "scc", "SCC", "psa", "PSA"},
+		"monitoring": {"monitoring", "Monitoring", "prometheus", "Prometheus", "grafana", "Grafana"},
+		"logging":    {"logging", "Logging", "fluentd", "Fluentd", "elasticsearch", "Elasticsearch"},
+	}
+
+	// Environment detection patterns
+	environmentPatterns = map[string][]string{
+		"single_node": {"sno", "SNO", "single", "Single", "standalone", "Standalone"},
+		"multi_node":  {"multi", "Multi", "cluster", "Cluster", "nodes", "Nodes"},
+		"bare_metal":  {"bare", "Bare", "metal", "Metal", "bmh", "BMH", "ironic", "Ironic"},
+		"virtual":     {"virtual", "Virtual", "vm", "VM", "kvm", "KVM", "libvirt", "Libvirt"},
+		"cloud":       {"cloud", "Cloud", "aws", "AWS", "azure", "Azure", "gcp", "GCP"},
+		"edge":        {"edge", "Edge", "remote", "Remote", "far", "Far"},
 	}
 
 	// eco-goinfra patterns
@@ -272,6 +301,104 @@ func detectHelperFunctionPattern(call *ast.CallExpr) (gvk string, verb string) {
 }
 
 // detectPurpose analyzes test content to determine its purpose
+// detectTestType determines the type of test based on file path, test name, and content
+func detectTestType(testName, filePath string, comments []string) string {
+	content := strings.ToLower(testName + " " + filePath)
+	for _, comment := range comments {
+		content += " " + strings.ToLower(comment)
+	}
+
+	scores := make(map[string]int)
+	for testType, patterns := range testTypePatterns {
+		score := 0
+		for _, pattern := range patterns {
+			if strings.Contains(content, strings.ToLower(pattern)) {
+				score++
+			}
+		}
+		scores[testType] = score
+	}
+
+	// Find the test type with highest score
+	maxScore := 0
+	detectedType := "unknown"
+	for testType, score := range scores {
+		if score > maxScore {
+			maxScore = score
+			detectedType = testType
+		}
+	}
+
+	// Default to integration if it's a Ginkgo test or has no clear type
+	if detectedType == "unknown" && (strings.Contains(content, "ginkgo") || strings.Contains(content, "suite")) {
+		detectedType = "integration"
+	}
+
+	return detectedType
+}
+
+// detectDependencies identifies required dependencies based on test content
+func detectDependencies(testName, filePath string, comments []string, actions []Action) []string {
+	content := strings.ToLower(testName + " " + filePath)
+	for _, comment := range comments {
+		content += " " + strings.ToLower(comment)
+	}
+
+	// Add action-based dependencies
+	for _, action := range actions {
+		gvk := strings.ToLower(action.GVK)
+		if strings.Contains(gvk, "operator") || strings.Contains(gvk, "subscription") || strings.Contains(gvk, "csv") {
+			content += " operator"
+		}
+		if strings.Contains(gvk, "pvc") || strings.Contains(gvk, "pv") || strings.Contains(gvk, "storage") {
+			content += " storage"
+		}
+		if strings.Contains(gvk, "network") || strings.Contains(gvk, "cni") || strings.Contains(gvk, "multus") {
+			content += " network"
+		}
+		if strings.Contains(gvk, "rbac") || strings.Contains(gvk, "scc") || strings.Contains(gvk, "security") {
+			content += " security"
+		}
+	}
+
+	var dependencies []string
+	for depType, patterns := range dependencyPatterns {
+		for _, pattern := range patterns {
+			if strings.Contains(content, strings.ToLower(pattern)) {
+				dependencies = append(dependencies, depType)
+				break
+			}
+		}
+	}
+
+	return dependencies
+}
+
+// detectEnvironment identifies the target environment based on test content
+func detectEnvironment(testName, filePath string, comments []string) []string {
+	content := strings.ToLower(testName + " " + filePath)
+	for _, comment := range comments {
+		content += " " + strings.ToLower(comment)
+	}
+
+	var environment []string
+	for envType, patterns := range environmentPatterns {
+		for _, pattern := range patterns {
+			if strings.Contains(content, strings.ToLower(pattern)) {
+				environment = append(environment, envType)
+				break
+			}
+		}
+	}
+
+	// Default to multi_node if no environment detected
+	if len(environment) == 0 {
+		environment = append(environment, "multi_node")
+	}
+
+	return environment
+}
+
 func detectPurpose(testName string, comments []string, actions []Action, expectations []map[string]string) string {
 	// Combine all text content for analysis
 	content := strings.ToLower(testName)
@@ -942,8 +1069,9 @@ func main() {
 		// If file has Ginkgo patterns, create a consolidated spec
 		if hasGinkgoPatterns {
 			spec := KubeSpec{
-				Level:             "integration",
-				Preconditions:     []string{},
+				TestType:          "integration",
+				Dependencies:      []string{},
+				Environment:       []string{},
 				Actions:           []Action{},
 				Expectations:      []map[string]string{},
 				OpenShiftSpecific: []string{},
@@ -1025,7 +1153,7 @@ func main() {
 						if strings.Contains(strings.ToLower(gvk), "/namespace") {
 							if lbs := collectPSALabels(x); len(lbs) > 0 {
 								for _, l := range lbs {
-									spec.Preconditions = append(spec.Preconditions, "psa:"+l)
+									spec.Dependencies = append(spec.Dependencies, "psa:"+l)
 								}
 							}
 						}
@@ -1092,17 +1220,17 @@ func main() {
 					bridges["equiv:scc~psa"] = true
 				}
 			}
-			for _, p := range spec.Preconditions {
+			for _, p := range spec.Dependencies {
 				if strings.HasPrefix(p, "psa:") {
 					bridges["equiv:scc~psa"] = true
 				}
 			}
 			for k := range bridges {
-				spec.Preconditions = append(spec.Preconditions, k)
+				spec.Dependencies = append(spec.Dependencies, k)
 			}
 
 			// Only output if we found meaningful patterns
-			if len(spec.Actions) > 0 || len(spec.OpenShiftSpecific) > 0 || len(spec.Preconditions) > 0 {
+			if len(spec.Actions) > 0 || len(spec.OpenShiftSpecific) > 0 || len(spec.Dependencies) > 0 {
 				// Detect purpose based on test content
 				comments := []string{} // TODO: Extract comments from AST
 				spec.Purpose = detectPurpose(spec.TestID, comments, spec.Actions, spec.Expectations)
@@ -1169,8 +1297,9 @@ func main() {
 			}
 
 			spec := KubeSpec{
-				Level:             "unknown",
-				Preconditions:     []string{},
+				TestType:          "unknown",
+				Dependencies:      []string{},
+				Environment:       []string{},
 				Actions:           []Action{},
 				Expectations:      []map[string]string{},
 				OpenShiftSpecific: []string{},
@@ -1185,7 +1314,7 @@ func main() {
 
 			openshiftSet := map[string]bool{}
 			verbs := map[string]bool{}
-			hasGinkgoPatterns := false
+			// hasGinkgoPatterns := false // Not used in this context
 			expectationsSet := map[string]bool{}
 			gvkSet := map[string]bool{}
 
@@ -1260,7 +1389,7 @@ func main() {
 						if strings.Contains(strings.ToLower(gvk), "/namespace") {
 							if lbs := collectPSALabels(x); len(lbs) > 0 {
 								for _, l := range lbs {
-									spec.Preconditions = append(spec.Preconditions, "psa:"+l)
+									spec.Dependencies = append(spec.Dependencies, "psa:"+l)
 								}
 							}
 						}
@@ -1324,12 +1453,11 @@ func main() {
 				}
 			}
 
-			// Determine test level
-			if hasGinkgoPatterns {
-				spec.Level = "integration" // Ginkgo tests are typically integration tests
-			} else if verbs["Create"] || verbs["Delete"] || verbs["Watch"] {
-				spec.Level = "integration"
-			}
+			// Detect test type, dependencies, and environment
+			comments := []string{} // TODO: Extract comments from AST
+			spec.TestType = detectTestType(spec.TestID, path, comments)
+			spec.Dependencies = detectDependencies(spec.TestID, path, comments, spec.Actions)
+			spec.Environment = detectEnvironment(spec.TestID, path, comments)
 
 			bridges := map[string]bool{}
 			for _, a := range spec.Actions {
@@ -1344,17 +1472,16 @@ func main() {
 					bridges["equiv:scc~psa"] = true
 				}
 			}
-			for _, p := range spec.Preconditions {
+			for _, p := range spec.Dependencies {
 				if strings.HasPrefix(p, "psa:") {
 					bridges["equiv:scc~psa"] = true
 				}
 			}
 			for k := range bridges {
-				spec.Preconditions = append(spec.Preconditions, k)
+				spec.Dependencies = append(spec.Dependencies, k)
 			}
 
 			// Detect purpose based on test content
-			comments := []string{} // TODO: Extract comments from AST
 			spec.Purpose = detectPurpose(spec.TestID, comments, spec.Actions, spec.Expectations)
 
 			b, _ := json.Marshal(spec)

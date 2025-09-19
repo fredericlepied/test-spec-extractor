@@ -42,6 +42,105 @@ PURPOSE_PATTERNS = {
     "PERFORMANCE": ["performance", "load", "stress", "benchmark", "latency", "throughput"],
 }
 
+# Test type detection patterns
+TEST_TYPE_PATTERNS = {
+    "unit": ["test", "Test", "unit", "Unit", "mock", "Mock"],
+    "integration": ["integration", "Integration", "e2e", "E2E", "pytest", "Pytest"],
+    "performance": ["performance", "Performance", "benchmark", "Benchmark", "load", "Load", "stress", "Stress"],
+    "conformance": ["conformance", "Conformance", "k8s", "K8s", "kubernetes", "Kubernetes"],
+}
+
+# Dependency detection patterns
+DEPENDENCY_PATTERNS = {
+    "operator": ["operator", "Operator", "csv", "CSV", "subscription", "Subscription"],
+    "storage": ["storage", "Storage", "pvc", "PVC", "pv", "PV", "volume", "Volume"],
+    "network": ["network", "Network", "cni", "CNI", "multus", "Multus", "sriov", "SR-IOV"],
+    "security": ["security", "Security", "rbac", "RBAC", "scc", "SCC", "psa", "PSA"],
+    "monitoring": ["monitoring", "Monitoring", "prometheus", "Prometheus", "grafana", "Grafana"],
+    "logging": ["logging", "Logging", "fluentd", "Fluentd", "elasticsearch", "Elasticsearch"],
+}
+
+# Environment detection patterns
+ENVIRONMENT_PATTERNS = {
+    "single_node": ["sno", "SNO", "single", "Single", "standalone", "Standalone"],
+    "multi_node": ["multi", "Multi", "cluster", "Cluster", "nodes", "Nodes"],
+    "bare_metal": ["bare", "Bare", "metal", "Metal", "bmh", "BMH", "ironic", "Ironic"],
+    "virtual": ["virtual", "Virtual", "vm", "VM", "kvm", "KVM", "libvirt", "Libvirt"],
+    "cloud": ["cloud", "Cloud", "aws", "AWS", "azure", "Azure", "gcp", "GCP"],
+    "edge": ["edge", "Edge", "remote", "Remote", "far", "Far"],
+}
+
+
+def detect_test_type(test_name: str, file_path: str, docstring: str) -> str:
+    """Detect the type of test based on file path, test name, and content"""
+    content = (test_name + " " + file_path + " " + (docstring or "")).lower()
+    
+    scores = {}
+    for test_type, patterns in TEST_TYPE_PATTERNS.items():
+        score = 0
+        for pattern in patterns:
+            if pattern.lower() in content:
+                score += 1
+        scores[test_type] = score
+    
+    # Find the test type with highest score
+    max_score = 0
+    detected_type = "unknown"
+    for test_type, score in scores.items():
+        if score > max_score:
+            max_score = score
+            detected_type = test_type
+    
+    # Default to integration if it's a pytest test
+    if detected_type == "unknown" and ("pytest" in content or "test" in content):
+        detected_type = "integration"
+    
+    return detected_type
+
+
+def detect_dependencies(test_name: str, file_path: str, docstring: str, actions: list) -> list:
+    """Detect required dependencies based on test content"""
+    content = (test_name + " " + file_path + " " + (docstring or "")).lower()
+    
+    # Add action-based dependencies
+    for action in actions:
+        gvk = action.get("gvk", "").lower()
+        if "operator" in gvk or "subscription" in gvk or "csv" in gvk:
+            content += " operator"
+        if "pvc" in gvk or "pv" in gvk or "storage" in gvk:
+            content += " storage"
+        if "network" in gvk or "cni" in gvk or "multus" in gvk:
+            content += " network"
+        if "rbac" in gvk or "scc" in gvk or "security" in gvk:
+            content += " security"
+    
+    dependencies = []
+    for dep_type, patterns in DEPENDENCY_PATTERNS.items():
+        for pattern in patterns:
+            if pattern.lower() in content:
+                dependencies.append(dep_type)
+                break
+    
+    return dependencies
+
+
+def detect_environment(test_name: str, file_path: str, docstring: str) -> list:
+    """Detect the target environment based on test content"""
+    content = (test_name + " " + file_path + " " + (docstring or "")).lower()
+    
+    environment = []
+    for env_type, patterns in ENVIRONMENT_PATTERNS.items():
+        for pattern in patterns:
+            if pattern.lower() in content:
+                environment.append(env_type)
+                break
+    
+    # Default to multi_node if no environment detected
+    if not environment:
+        environment = ["multi_node"]
+    
+    return environment
+
 
 def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
     """Extract meaningful expectation information from assert statements"""
@@ -139,8 +238,9 @@ class TestVisitor(ast.NodeVisitor):
         relative_path = os.path.relpath(self.path, self.root_path)
         spec = {
             "test_id": f"{basename}/{relative_path}:{node.name}",
-            "level": "unknown",
-            "preconditions": [],
+            "test_type": "unknown",
+            "dependencies": [],
+            "environment": [],
             "actions": [],
             "expectations": [],
             "openshift_specific": [],
@@ -150,7 +250,7 @@ class TestVisitor(ast.NodeVisitor):
         }
         for dec in node.decorator_list:
             if isinstance(dec, ast.Call) and getattr(dec.func, "attr", "") == "parametrize":
-                spec["preconditions"].append("parametrized")
+                spec["dependencies"].append("parametrized")
         for n in ast.walk(node):
             if isinstance(n, ast.Call):
                 func = n.func
@@ -237,9 +337,9 @@ class TestVisitor(ast.NodeVisitor):
                                     if k in low:
                                         m = re.search(k + r"=([^\s]+)", low)
                                         if m:
-                                            spec["preconditions"].append(f"psa:{k}={m.group(1)}")
+                                            spec["dependencies"].append(f"psa:{k}={m.group(1)}")
                             if any(p in low for p in [s.lower() for s in SCC_CLI_PATTERNS]):
-                                spec["preconditions"].append("equiv:scc~psa")
+                                spec["dependencies"].append("equiv:scc~psa")
                             if isinstance(func, ast.Attribute) and func.attr == "raises":
                                 if getattr(func.value, "id", "") == "pytest":
                                     spec["expectations"].append(
@@ -282,14 +382,19 @@ class TestVisitor(ast.NodeVisitor):
                 bridges.add("equiv:route~ingress")
             if "security.openshift.io" in g:
                 bridges.add("equiv:scc~psa")
-        for p in spec["preconditions"]:
+        for p in spec["dependencies"]:
             if p.startswith("psa:"):
                 bridges.add("equiv:scc~psa")
         for b in sorted(bridges):
-            spec["preconditions"].append(b)
+            spec["dependencies"].append(b)
 
-        # Detect purpose based on test content
+        # Detect test type, dependencies, and environment
         docstring = ast.get_docstring(node) or ""
+        spec["test_type"] = detect_test_type(node.name, self.path, docstring)
+        spec["dependencies"].extend(detect_dependencies(node.name, self.path, docstring, spec["actions"]))
+        spec["environment"] = detect_environment(node.name, self.path, docstring)
+        
+        # Detect purpose based on test content
         spec["purpose"] = detect_purpose(
             node.name, docstring, spec["actions"], spec["expectations"]
         )
