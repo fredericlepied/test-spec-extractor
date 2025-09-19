@@ -43,6 +43,196 @@ The pipeline generates:
 - `test_coverage.csv`: Coverage matrix of operations across test suites
 - `go_specs.jsonl` / `py_specs.jsonl`: Raw extracted test specifications
 
+## 📊 Analyzing Results
+
+### **Understanding the Test Report (`test_report.csv`)**
+
+The test report contains similarity matches between Go and Python tests with detailed scoring:
+
+```csv
+idx_a,idx_b,base_score,blended_score,a_test,b_test,shared_signals
+43,147,0.768,1.0,eco-pytests/test.py:test_function,eco-gotests/test.go:TestFunction,exact:v1/Pod:get;resource:v1/Pod
+```
+
+**Column Descriptions:**
+
+- `idx_a`, `idx_b`: Index references to the original spec files
+- `base_score`: Raw semantic similarity score (0.0-1.0)
+- `blended_score`: Final score after purpose-based filtering and boosts
+- `a_test`, `b_test`: Test identifiers (format: `repo/path/file:function`)
+- `shared_signals`: Types of shared operations between tests
+
+**Shared Signal Types:**
+
+- `exact:gvk:verb`: Exact operation match (e.g., `exact:v1/Pod:get`)
+- `resource:gvk`: Resource-level match (e.g., `resource:v1/Pod`)
+- `category:gvk:category`: Operation category match (e.g., `category:v1/Pod:read`)
+- `verb_group:gvk:group`: Verb group match (e.g., `verb_group:v1/Pod:read_operations`)
+
+**How to Analyze:**
+
+```bash
+# View top matches by blended score
+sort -t',' -k4 -nr test_report.csv | head -10
+
+# Find matches with exact operations
+grep "exact:" test_report.csv
+
+# Count matches by shared signal type
+cut -d',' -f7 test_report.csv | tr ';' '\n' | cut -d':' -f1 | sort | uniq -c
+
+# Filter by specific test
+grep "test_function_name" test_report.csv
+```
+
+### **Understanding the Coverage Matrix (`test_coverage.csv`)**
+
+The coverage matrix shows which operations are tested across different test suites:
+
+```csv
+operation,go_count,py_count,total_count,coverage_ratio
+v1/Pod:get,45,23,68,0.68
+v1/Namespace:create,32,15,47,0.47
+```
+
+**Column Descriptions:**
+
+- `operation`: Kubernetes operation (GVK:verb format)
+- `go_count`: Number of Go tests using this operation
+- `py_count`: Number of Python tests using this operation
+- `total_count`: Total unique tests using this operation
+- `coverage_ratio`: Ratio of tests using this operation
+
+**How to Analyze:**
+
+```bash
+# Find most common operations
+sort -t',' -k4 -nr test_coverage.csv | head -10
+
+# Find operations only tested in Go
+awk -F',' '$3==0 {print $0}' test_coverage.csv
+
+# Find operations only tested in Python
+awk -F',' '$2==0 {print $0}' test_coverage.csv
+
+# Find operations with high coverage
+awk -F',' '$5>0.5 {print $0}' test_coverage.csv
+```
+
+### **Understanding the Spec Files (`*_specs.jsonl`)**
+
+Each line in the spec files contains a complete test specification in JSON format:
+
+```json
+{
+  "test_id": "eco-gotests/tests/pod_test.go:TestPodHealth",
+  "test_type": "integration",
+  "dependencies": ["network", "storage"],
+  "environment": ["multi_node"],
+  "actions": [{"gvk": "v1/Pod", "verb": "get"}],
+  "expectations": [{"target": "resource_status", "condition": "pod.status.phase == 'Running'"}],
+  "openshift_specific": ["route.openshift.io/v1/Route"],
+  "concurrency": [],
+  "artifacts": ["testdata/pod.yaml"],
+  "purpose": "POD_HEALTH"
+}
+```
+
+**Field Descriptions:**
+
+- `test_id`: Unique identifier (repo/path/file:function)
+- `test_type`: Test classification (unit, integration, e2e, performance, conformance)
+- `dependencies`: Required components (network, storage, operator, etc.)
+- `environment`: Target environment (single_node, multi_node, bare_metal, cloud, edge)
+- `actions`: Kubernetes operations performed (GVK:verb pairs)
+- `expectations`: Test assertions and validations
+- `openshift_specific`: OpenShift-specific resources used
+- `concurrency`: Concurrency-related patterns
+- `artifacts`: Test data files and golden files
+- `purpose`: Primary test intent (POD_HEALTH, NETWORK_CONNECTIVITY, etc.)
+
+**How to Analyze:**
+
+```bash
+# Count tests by purpose
+jq -r '.purpose' go_specs.jsonl | sort | uniq -c | sort -nr
+
+# Find tests with specific operations
+jq -r 'select(.actions[].gvk == "v1/Pod") | .test_id' go_specs.jsonl
+
+# Find tests by environment
+jq -r 'select(.environment[] == "multi_node") | .test_id' go_specs.jsonl
+
+# Find tests with specific dependencies
+jq -r 'select(.dependencies[] == "network") | .test_id' go_specs.jsonl
+
+# Compare test types between Go and Python
+echo "Go test types:"; jq -r '.test_type' go_specs.jsonl | sort | uniq -c
+echo "Python test types:"; jq -r '.test_type' py_specs.jsonl | sort | uniq -c
+```
+
+### **Quality Assessment Workflow**
+
+1. **Check Match Quality:**
+
+   ```bash
+   # Look for exact operation matches (highest quality)
+   grep "exact:" test_report.csv | head -5
+   
+   # Check purpose compatibility
+   awk -F',' 'NR>1 {print $5, $6}' test_report.csv | head -10
+   ```
+
+2. **Identify Coverage Gaps:**
+
+   ```bash
+   # Find operations with low coverage
+   awk -F',' '$5<0.3 {print $0}' test_coverage.csv
+   
+   # Find operations only in one language
+   awk -F',' '$2==0 || $3==0 {print $0}' test_coverage.csv
+   ```
+
+3. **Validate Similarity:**
+   ```bash
+   # Get details of top matches
+   head -5 test_report.csv | while IFS=',' read -r idx_a idx_b base_score blended_score a_test b_test shared_signals; do
+     echo "Match: $a_test ↔ $b_test"
+     echo "Score: $blended_score"
+     echo "Shared: $shared_signals"
+     echo "---"
+   done
+   ```
+
+### **Advanced Analysis Examples**
+
+**Find Cross-Language Test Pairs:**
+
+```bash
+# Extract test pairs with their details
+awk -F',' 'NR>1 {print $5, $6, $4, $7}' test_report.csv | head -10
+```
+
+**Analyze Purpose Distribution:**
+
+```bash
+# Go test purposes
+jq -r '.purpose' go_specs.jsonl | sort | uniq -c | sort -nr
+
+# Python test purposes  
+jq -r '.purpose' py_specs.jsonl | sort | uniq -c | sort -nr
+```
+
+**Find Tests by Operation Type:**
+
+```bash
+# Tests that create resources
+jq -r 'select(.actions[].verb == "create") | .test_id' go_specs.jsonl
+
+# Tests that validate resource status
+jq -r 'select(.expectations[].target == "resource_status") | .test_id' py_specs.jsonl
+```
+
 ## 📊 Purpose Categories
 
 The system automatically detects and categorizes tests by purpose:
@@ -71,6 +261,7 @@ The system automatically detects and categorizes tests by purpose:
 ## 🔍 Example Results
 
 ### **Before Purpose-Based Filtering:**
+
 ```
 ❌ BAD MATCH: ReachURLviaFRRroute (NETWORK_CONNECTIVITY) ↔ test_cu_pods_status (POD_HEALTH)
    - Shared: resource:v1/Pod (only resource-level similarity)
@@ -78,6 +269,7 @@ The system automatically detects and categorizes tests by purpose:
 ```
 
 ### **After Purpose-Based Filtering:**
+
 ```
 ✅ GOOD MATCH: metallb-crds.go (POD_MANAGEMENT) ↔ test_du_pods_status (POD_HEALTH)
    - Shared: exact:v1/Pod:get;resource:v1/Pod;category:v1/Pod:read
@@ -95,6 +287,7 @@ go build -o kubespec-go
 ```
 
 **Features:**
+
 - Detects Ginkgo/Gomega patterns (`Describe`, `It`, `BeforeEach`, etc.)
 - Extracts eco-goinfra operations (`pods.List()`, `deployments.Create()`, etc.)
 - Maps CLI commands to API operations (`kubectl get pods` → `v1/Pod:get`)
@@ -124,6 +317,7 @@ python build_index_and_match.py --go ../go_specs.jsonl --py ../py_specs.jsonl --
 ```
 
 **Features:**
+
 - Semantic embeddings using SentenceTransformers
 - FAISS-based similarity search
 - Purpose-based filtering and scoring
@@ -141,11 +335,13 @@ python build_index_and_match.py --go go_specs.jsonl --py py_specs.jsonl --out re
 ## 📈 Performance Metrics
 
 ### **Filtering Impact:**
+
 - **Before**: 1370 total matches (many false positives)
 - **After**: 657 total matches (52% reduction)
 - **Quality**: Only compatible purpose matches remain
 
 ### **Validation Rates:**
+
 - **Purpose Compatibility**: 50%+ of high-similarity matches
 - **Operation Validation**: Detects shared operations in meaningful matches
 - **False Positive Reduction**: 52% fewer misleading matches
@@ -153,12 +349,14 @@ python build_index_and_match.py --go go_specs.jsonl --py py_specs.jsonl --out re
 ## 🏗 Architecture
 
 ### **Extraction Pipeline**
+
 ```
 Go Tests → AST Analysis → KubeSpec → Purpose Detection
 Python Tests → AST Analysis → KubeSpec → Purpose Detection
 ```
 
 ### **Matching Pipeline**
+
 ```
 KubeSpecs → Embeddings → Similarity Search → Purpose Filtering → Scoring → Results
 ```
@@ -191,6 +389,7 @@ PURPOSE_COMPATIBILITY = {
 ### **Scoring Weights**
 
 Customize scoring boosts in the matching engine:
+
 ```python
 # Same purpose boost
 purpose_boost = 0.20  # +20% for same purpose
@@ -205,12 +404,14 @@ purpose_boost = -0.30  # -30% for incompatible purposes
 ## 📋 Output Format
 
 ### **Test Report CSV**
+
 ```csv
 idx_a,idx_b,base_score,blended_score,a_test,b_test,shared_signals
 0,1,0.85,1.0,eco-gotests/test.go:TestFunction,eco-pytests/test.py:test_function,exact:v1/Pod:get;resource:v1/Pod
 ```
 
 ### **KubeSpec JSONL**
+
 ```json
 {
   "test_id": "repo/test.go:TestFunction",
@@ -250,10 +451,7 @@ idx_a,idx_b,base_score,blended_score,a_test,b_test,shared_signals
 ### **Debug Mode**
 
 Enable verbose output:
+
 ```bash
 ./extract-and-match.sh -g /path/to/go -p /path/to/py -o debug_output 2>&1 | tee debug.log
 ```
-
-## 📄 License
-
-This project is part of the eco-system test analysis toolkit.
