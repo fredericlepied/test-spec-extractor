@@ -200,6 +200,9 @@ var (
 		"SECURITY_TESTING":     {"security", "rbac", "scc", "psa", "permission", "access"},
 		"CONFIGURATION":        {"config", "configuration", "settings", "parameters", "env"},
 		"PERFORMANCE":          {"performance", "load", "stress", "benchmark", "latency", "throughput"},
+		"SRIOV_TESTING":        {"sriov", "sr-iov", "single", "root", "iov", "vf", "pf", "virtual", "function", "networkattachment"},
+		"DUAL_STACK_TESTING":   {"dual", "stack", "dualstack", "ipv4", "ipv6", "dual", "ip"},
+		"PTP_TESTING":          {"ptp", "precision", "time", "sync", "clock", "timing", "ptpoperator"},
 	}
 )
 

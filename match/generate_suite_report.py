@@ -126,6 +126,20 @@ def generate_coverage_analysis(analysis):
             coverage.append(f"- `{resource}`: {format_number(count)} operations")
         coverage.append("")
     
+    # Networking technology analysis
+    purposes = analysis.get('test_distribution', {}).get('by_purpose', {})
+    networking_tech = {}
+    for purpose, count in purposes.items():
+        if purpose in ['SRIOV_TESTING', 'DUAL_STACK_TESTING', 'PTP_TESTING']:
+            networking_tech[purpose] = count
+    
+    if networking_tech:
+        coverage.append("**Networking Technologies:**")
+        for tech, count in networking_tech.items():
+            tech_name = tech.replace('_TESTING', '').replace('_', ' ').title()
+            coverage.append(f"- {tech_name}: {format_number(count)} tests")
+        coverage.append("")
+    
     return "\n".join(coverage)
 
 
