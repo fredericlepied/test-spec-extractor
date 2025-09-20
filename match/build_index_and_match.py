@@ -77,14 +77,43 @@ PURPOSE_COMPATIBILITY = {
     ],
 }
 
-# Networking technology compatibility matrix
-NETWORKING_TECH_COMPATIBILITY = {
-    "SR-IOV": ["SR-IOV", "CNI"],  # SR-IOV can match with CNI (both are networking)
-    "PTP": ["PTP", "CNI"],  # PTP can match with CNI (both are networking)
-    "DPDK": ["DPDK", "CNI"],  # DPDK can match with CNI (both are networking)
+# Resource compatibility matrix - defines which Kubernetes resources are compatible for matching
+RESOURCE_COMPATIBILITY = {
+    # Pod-related resources
+    "v1/Pod": ["v1/Pod", "apps/v1/Deployment", "apps/v1/StatefulSet", "apps/v1/DaemonSet"],
+    "apps/v1/Deployment": ["v1/Pod", "apps/v1/Deployment", "apps/v1/StatefulSet"],
+    "apps/v1/StatefulSet": ["v1/Pod", "apps/v1/Deployment", "apps/v1/StatefulSet"],
+    "apps/v1/DaemonSet": ["v1/Pod", "apps/v1/DaemonSet"],
+    
+    # Namespace-related resources
+    "v1/Namespace": ["v1/Namespace", "v1/Pod", "apps/v1/Deployment", "apps/v1/StatefulSet"],
+    
+    # Cluster management resources (incompatible with each other)
+    "config.openshift.io/v1/ClusterVersion": ["config.openshift.io/v1/ClusterVersion"],
+    "hive.openshift.io/v1/ClusterDeployment": ["hive.openshift.io/v1/ClusterDeployment"],
+    "metal3.io/v1alpha1/BareMetalHost": ["metal3.io/v1alpha1/BareMetalHost"],
+    
+    # Network-related resources
+    "v1/Service": ["v1/Service", "route.openshift.io/v1/Route"],
+    "route.openshift.io/v1/Route": ["v1/Service", "route.openshift.io/v1/Route"],
+    
+    # Storage-related resources
+    "v1/PersistentVolume": ["v1/PersistentVolume", "v1/PersistentVolumeClaim"],
+    "v1/PersistentVolumeClaim": ["v1/PersistentVolume", "v1/PersistentVolumeClaim"],
+    
+    # Operator-related resources
+    "operators.coreos.com/v1alpha1/ClusterServiceVersion": ["operators.coreos.com/v1alpha1/ClusterServiceVersion"],
+    "operators.coreos.com/v1alpha1/Subscription": ["operators.coreos.com/v1alpha1/Subscription"],
+}
+
+# Technology compatibility matrix - expanded to include all technology domains
+TECH_COMPATIBILITY = {
+    # Networking technologies
+    "SR-IOV": ["SR-IOV", "CNI", "Virtualization"],  # SR-IOV can match with CNI and virtualization
+    "PTP": ["PTP", "CNI", "Edge Computing"],  # PTP can match with CNI and edge computing
+    "DPDK": ["DPDK", "CNI", "Virtualization"],  # DPDK can match with CNI and virtualization
     "MetalLB": ["MetalLB", "CNI"],  # MetalLB can match with CNI (both are networking)
-    "GPU": ["GPU"],  # GPU only matches GPU (hardware acceleration)
-    "RDMA": ["RDMA", "CNI"],  # RDMA can match with CNI (both are networking)
+    "RDMA": ["RDMA", "CNI", "Storage"],  # RDMA can match with CNI and storage
     "Bonding": ["Bonding", "CNI"],  # Bonding can match with CNI (both are networking)
     "CNI": [
         "SR-IOV",
@@ -94,8 +123,32 @@ NETWORKING_TECH_COMPATIBILITY = {
         "RDMA",
         "Bonding",
         "CNI",
-    ],  # CNI is compatible with all networking tech
-    "Power Management": ["Power Management"],  # Power management only matches itself
+        "Virtualization",
+    ],  # CNI is compatible with networking and virtualization
+    
+    # Hardware acceleration
+    "GPU": ["GPU", "Machine Learning", "Virtualization"],  # GPU can match with ML and virtualization
+    
+    # Virtualization
+    "Virtualization": ["SR-IOV", "DPDK", "CNI", "GPU", "Storage", "Security"],  # Virtualization is compatible with many technologies
+    
+    # Storage
+    "Storage": ["RDMA", "Virtualization", "Security", "Monitoring"],  # Storage can match with RDMA, virtualization, security, monitoring
+    
+    # Security
+    "Security": ["Virtualization", "Storage", "Monitoring", "Edge Computing"],  # Security is compatible with many domains
+    
+    # Monitoring/Observability
+    "Monitoring": ["Storage", "Security", "Edge Computing", "Machine Learning"],  # Monitoring is compatible with many domains
+    
+    # Machine Learning/AI
+    "Machine Learning": ["GPU", "Edge Computing", "Monitoring"],  # ML can match with GPU, edge computing, monitoring
+    
+    # Edge Computing
+    "Edge Computing": ["PTP", "Security", "Monitoring", "Machine Learning"],  # Edge computing is compatible with time-sensitive and monitoring tech
+    
+    # Power Management
+    "Power Management": ["Power Management", "Edge Computing"],  # Power management can match with edge computing
 }
 
 
@@ -113,22 +166,37 @@ def is_purpose_compatible(purpose_a: str, purpose_b: str) -> bool:
     return purpose_b in compatible_purposes
 
 
-def is_networking_tech_compatible(tech_a: List[str], tech_b: List[str]) -> bool:
-    """Check if two sets of networking technologies are compatible for matching."""
-    if not tech_a or not tech_b:
-        return True  # Allow matches if no networking tech specified
+def is_resource_compatible(resources_a: List[str], resources_b: List[str]) -> bool:
+    """Check if two sets of Kubernetes resources are compatible for matching."""
+    if not resources_a or not resources_b:
+        return True  # Allow matches if no resources specified
+    
+    # Check if any resource from test A is compatible with any resource from test B
+    for res1 in resources_a:
+        for res2 in resources_b:
+            compatible_resources = RESOURCE_COMPATIBILITY.get(res1, [])
+            if res2 in compatible_resources:
+                return True
+    
+    return False
 
-    # If either test has no networking tech, allow the match
+
+def is_tech_compatible(tech_a: List[str], tech_b: List[str]) -> bool:
+    """Check if two sets of technologies are compatible for matching."""
+    if not tech_a or not tech_b:
+        return True  # Allow matches if no tech specified
+    
+    # If either test has no tech, allow the match
     if not tech_a or not tech_b:
         return True
-
+    
     # Check if any technology from test A is compatible with any technology from test B
     for tech1 in tech_a:
         for tech2 in tech_b:
-            compatible_techs = NETWORKING_TECH_COMPATIBILITY.get(tech1, [])
+            compatible_techs = TECH_COMPATIBILITY.get(tech1, [])
             if tech2 in compatible_techs:
                 return True
-
+    
     return False
 
 
@@ -251,7 +319,7 @@ def filter_by_purpose_compatibility(
     specs_a: List[Dict[str, Any]],
     specs_b: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Filter matches based on purpose compatibility, networking tech compatibility, and meaningful operations."""
+    """Filter matches based on purpose compatibility, resource compatibility, networking tech compatibility, and meaningful operations."""
     filtered = []
     for match in matches:
         idx_a = match["idx_a"]
@@ -261,13 +329,19 @@ def filter_by_purpose_compatibility(
         purpose_b = specs_b[idx_b].get("purpose", "")
         tech_a = specs_a[idx_a].get("networking_tech", [])
         tech_b = specs_b[idx_b].get("networking_tech", [])
+        resources_a = get_resources_from_spec(specs_a[idx_a])
+        resources_b = get_resources_from_spec(specs_b[idx_b])
 
         # Check purpose compatibility
         if not is_purpose_compatible(purpose_a, purpose_b):
             continue
 
-        # Check networking technology compatibility
-        if not is_networking_tech_compatible(tech_a, tech_b):
+        # Check resource compatibility
+        if not is_resource_compatible(resources_a, resources_b):
+            continue
+
+        # Check technology compatibility
+        if not is_tech_compatible(tech_a, tech_b):
             continue
 
         # For high-similarity matches, also check for meaningful operations
@@ -538,6 +612,16 @@ def get_verb_group_tokens(s: Dict[str, Any]) -> Set[str]:
     return tokens
 
 
+def get_resources_from_spec(spec: Dict[str, Any]) -> List[str]:
+    """Extract unique resource types (GVKs) from a spec."""
+    resources = set()
+    actions = spec.get("actions", [])
+    for action in actions:
+        if isinstance(action, dict) and "gvk" in action:
+            resources.add(action["gvk"])
+    return list(resources)
+
+
 def shared_signals(a: Dict[str, Any], b: Dict[str, Any]) -> str:
     """Enhanced shared signals detection with multiple similarity levels."""
     signals = []
@@ -577,16 +661,28 @@ def shared_signals(a: Dict[str, Any], b: Dict[str, Any]) -> str:
         elif is_purpose_compatible(purpose_a, purpose_b):
             signals.append(f"purpose_compatible:{purpose_a}~{purpose_b}")
 
-    # 6. Networking technology compatibility
+    # 6. Resource compatibility
+    resources_a = get_resources_from_spec(a)
+    resources_b = get_resources_from_spec(b)
+    if resources_a and resources_b:
+        common_resources = set(resources_a) & set(resources_b)
+        if common_resources:
+            signals.append(f"resources:{','.join(sorted(common_resources))}")
+        elif is_resource_compatible(resources_a, resources_b):
+            signals.append(
+                f"resources_compatible:{','.join(sorted(resources_a))}~{','.join(sorted(resources_b))}"
+            )
+
+    # 7. Networking technology compatibility
     tech_a = a.get("networking_tech", [])
     tech_b = b.get("networking_tech", [])
     if tech_a and tech_b:
         common_techs = set(tech_a) & set(tech_b)
         if common_techs:
             signals.append(f"networking_tech:{','.join(sorted(common_techs))}")
-        elif is_networking_tech_compatible(tech_a, tech_b):
+        elif is_tech_compatible(tech_a, tech_b):
             signals.append(
-                f"networking_tech_compatible:{','.join(sorted(tech_a))}~{','.join(sorted(tech_b))}"
+                f"tech_compatible:{','.join(sorted(tech_a))}~{','.join(sorted(tech_b))}"
             )
 
     return ";".join(signals)
@@ -629,7 +725,7 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
                     tech_boost = 0.15 * len(
                         common_techs
                     )  # Boost for common technologies
-                elif is_networking_tech_compatible(tech_a, tech_b):
+                elif is_tech_compatible(tech_a, tech_b):
                     tech_boost = 0.08  # Moderate boost for compatible technologies
                 else:
                     tech_boost = -0.20  # Penalty for incompatible technologies
@@ -758,7 +854,7 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
             common_techs = set(tech_a) & set(tech_b)
             if common_techs:
                 tech_same_matches.append(p)
-            elif is_networking_tech_compatible(tech_a, tech_b):
+            elif is_tech_compatible(tech_a, tech_b):
                 tech_compatible_matches.append(p)
 
         # Check functional similarity

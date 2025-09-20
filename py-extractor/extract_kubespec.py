@@ -402,6 +402,121 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
             networking_tech.append("Power Management")
             break
 
+    # Check for virtualization patterns
+    virt_patterns = [
+        "kvm",
+        "qemu",
+        "libvirt",
+        "virt",
+        "vm",
+        "virtualization",
+        "hypervisor",
+        "container",
+        "docker",
+        "podman",
+        "crio",
+        "containerd",
+    ]
+    for pattern in virt_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("Virtualization")
+            break
+
+    # Check for storage patterns
+    storage_patterns = [
+        "ceph",
+        "gluster",
+        "nfs",
+        "iscsi",
+        "lvm",
+        "zfs",
+        "snapshot",
+        "backup",
+        "storage",
+        "volume",
+        "pvc",
+        "pv",
+    ]
+    for pattern in storage_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("Storage")
+            break
+
+    # Check for security patterns
+    security_patterns = [
+        "selinux",
+        "apparmor",
+        "seccomp",
+        "firewall",
+        "iptables",
+        "nftables",
+        "tls",
+        "ssl",
+        "certificate",
+        "encryption",
+        "rbac",
+        "scc",
+        "psa",
+    ]
+    for pattern in security_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("Security")
+            break
+
+    # Check for monitoring/observability patterns
+    monitoring_patterns = [
+        "prometheus",
+        "grafana",
+        "alertmanager",
+        "metrics",
+        "logging",
+        "fluentd",
+        "elasticsearch",
+        "kibana",
+        "jaeger",
+        "tracing",
+        "telemetry",
+        "monitoring",
+    ]
+    for pattern in monitoring_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("Monitoring")
+            break
+
+    # Check for machine learning/AI patterns
+    ml_patterns = [
+        "tensorflow",
+        "pytorch",
+        "onnx",
+        r"\bml\b",
+        r"\bai\b",
+        "inference",
+        "model",
+        "training",
+        "neural",
+        "deep.*learning",
+    ]
+    for pattern in ml_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("Machine Learning")
+            break
+
+    # Check for edge computing patterns
+    edge_patterns = [
+        "edge",
+        "iot",
+        "5g",
+        "latency",
+        "real.*time",
+        "time.*sensitive",
+        "industrial",
+        "automation",
+    ]
+    for pattern in edge_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("Edge Computing")
+            break
+
     return networking_tech
 
 

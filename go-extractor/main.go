@@ -496,6 +496,60 @@ func detectNetworkingTech(testName, filePath string, comments []string) []string
 		}
 	}
 
+	// Check for virtualization patterns
+	virtPatterns := []string{"kvm", "qemu", "libvirt", "virt", "vm", "virtualization", "hypervisor", "container", "docker", "podman", "crio", "containerd"}
+	for _, pattern := range virtPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Virtualization")
+			break
+		}
+	}
+
+	// Check for storage patterns
+	storagePatterns := []string{"ceph", "gluster", "nfs", "iscsi", "lvm", "zfs", "snapshot", "backup", "storage", "volume", "pvc", "pv"}
+	for _, pattern := range storagePatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Storage")
+			break
+		}
+	}
+
+	// Check for security patterns
+	securityPatterns := []string{"selinux", "apparmor", "seccomp", "firewall", "iptables", "nftables", "tls", "ssl", "certificate", "encryption", "rbac", "scc", "psa"}
+	for _, pattern := range securityPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Security")
+			break
+		}
+	}
+
+	// Check for monitoring/observability patterns
+	monitoringPatterns := []string{"prometheus", "grafana", "alertmanager", "metrics", "logging", "fluentd", "elasticsearch", "kibana", "jaeger", "tracing", "telemetry", "monitoring"}
+	for _, pattern := range monitoringPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Monitoring")
+			break
+		}
+	}
+
+	// Check for machine learning/AI patterns
+	mlPatterns := []string{"tensorflow", "pytorch", "onnx", "\\bml\\b", "\\bai\\b", "inference", "model", "training", "neural", "deep.*learning"}
+	for _, pattern := range mlPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Machine Learning")
+			break
+		}
+	}
+
+	// Check for edge computing patterns
+	edgePatterns := []string{"edge", "iot", "5g", "latency", "real.*time", "time.*sensitive", "industrial", "automation"}
+	for _, pattern := range edgePatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Edge Computing")
+			break
+		}
+	}
+
 	return networkingTech
 }
 
