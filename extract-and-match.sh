@@ -310,9 +310,47 @@ if [[ -f "$OUTPUT_DIR/test_report.csv" ]]; then
     echo
 fi
 
-# Step 8: Cleanup (optional)
+# Step 8: Test Suite Analysis
+print_status "Step 8: Analyzing individual test suites..."
+if [[ -f "$OUTPUT_DIR/go_specs.jsonl" && -f "$OUTPUT_DIR/py_specs.jsonl" ]]; then
+    print_status "Running per-suite analysis and comparisons..."
+    if python match/analyze_test_suites.py --go "$OUTPUT_DIR/go_specs.jsonl" --py "$OUTPUT_DIR/py_specs.jsonl" --output "$OUTPUT_DIR" --compare; then
+        print_success "Test suite analysis completed"
+        print_status "Analysis files generated:"
+        # List individual suite analysis files
+        for file in "$OUTPUT_DIR"/*_analysis.json; do
+            if [[ -f "$file" ]]; then
+                suite_name=$(basename "$file" _analysis.json)
+                echo "  - $file ($suite_name analysis)"
+            fi
+        done
+        if [[ -f "$OUTPUT_DIR/all_suite_comparisons.json" ]]; then
+            echo "  - $OUTPUT_DIR/all_suite_comparisons.json (All suite comparisons)"
+        fi
+        
+        # Generate high-level reports
+        print_status "Generating high-level reports for test suite owners..."
+        for file in "$OUTPUT_DIR"/*_analysis.json; do
+            if [[ -f "$file" ]]; then
+                suite_name=$(basename "$file" _analysis.json)
+                report_file="$OUTPUT_DIR/${suite_name}_report.md"
+                if python match/generate_suite_report.py "$file" -o "$report_file"; then
+                    echo "  - $report_file ($suite_name report)"
+                else
+                    print_warning "Failed to generate report for $suite_name"
+                fi
+            fi
+        done
+    else
+        print_warning "Test suite analysis failed, but continuing..."
+    fi
+else
+    print_warning "Skipping test suite analysis (spec files not found)"
+fi
+
+# Step 9: Cleanup (optional)
 if [[ "$CLEANUP" == "true" ]]; then
-    print_status "Step 8: Cleaning up intermediate files..."
+    print_status "Step 9: Cleaning up intermediate files..."
     # Only remove Go binary if it was built during this run
     if [[ "$NEED_BUILD" == "true" ]]; then
         rm -f go-extractor/kubespec-go
@@ -335,6 +373,9 @@ echo "  - $OUTPUT_DIR/go_specs.jsonl (Combined Go test specs)"
 echo "  - $OUTPUT_DIR/py_specs.jsonl (Combined Python test specs)"
 echo "  - $OUTPUT_DIR/test_report.csv (Similarity matches)"
 echo "  - $OUTPUT_DIR/test_coverage.csv (Coverage matrix)"
+echo "  - $OUTPUT_DIR/*_analysis.json (Individual test suite analyses)"
+echo "  - $OUTPUT_DIR/*_report.md (High-level reports for test suite owners)"
+echo "  - $OUTPUT_DIR/all_suite_comparisons.json (All suite comparisons)"
 
 if [[ "$CLEANUP" == "false" ]]; then
     print_status "Individual repository files (preserved):"

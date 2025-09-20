@@ -42,6 +42,8 @@ The pipeline generates:
 - `test_report.csv`: Similarity matches with scores and shared operations
 - `test_coverage.csv`: Coverage matrix of operations across test suites
 - `go_specs.jsonl` / `py_specs.jsonl`: Raw extracted test specifications
+- `*_analysis.json`: Individual test suite analyses (one per repository)
+- `all_suite_comparisons.json`: Comprehensive cross-suite comparisons
 
 ## 📊 Analyzing Results
 
@@ -231,6 +233,185 @@ jq -r 'select(.actions[].verb == "create") | .test_id' go_specs.jsonl
 
 # Tests that validate resource status
 jq -r 'select(.expectations[].target == "resource_status") | .test_id' py_specs.jsonl
+```
+
+## 🔍 Test Suite Analysis
+
+### **Understanding Suite Analysis Files**
+
+The pipeline automatically generates comprehensive analyses for each individual test suite (repository):
+
+#### **Individual Suite Analysis (`*_analysis.json`)**
+
+Each analysis provides detailed insights into a specific test suite:
+
+```json
+{
+  "suite_name": "Go Tests",
+  "total_tests": 1086,
+  "coverage_metrics": {
+    "unique_operations": 909,
+    "unique_resources": 184,
+    "avg_operations_per_test": 5.9
+  },
+  "test_distribution": {
+    "by_type": {"integration": 756, "unit": 197, "conformance": 133},
+    "by_purpose": {"POD_MANAGEMENT": 422, "RESOURCE_VALIDATION": 261},
+    "by_environment": {"multi_node": 334, "cloud": 10}
+  },
+  "key_insights": [
+    "Primary test type: integration (756 tests, 69.6%)",
+    "Main focus: POD_MANAGEMENT (422 tests, 38.9%)",
+    "Most tested resources: meta/v1/GetOptions (728), v1/Pod (337)"
+  ]
+}
+```
+
+#### **Cross-Suite Comparison (`all_suite_comparisons.json`)**
+
+Identifies gaps and differences between all test suites:
+
+```json
+{
+  "suite1": "Go Tests",
+  "suite2": "Python Tests",
+  "test_count_diff": 975,
+  "operation_gaps": {
+    "unique_to_suite1": ["v1/Pod:create", "v1/Namespace:delete"],
+    "unique_to_suite2": ["hive.openshift.io/v1/ClusterDeployment:get"],
+    "common": ["v1/Pod:get", "v1/Namespace:get"]
+  },
+  "recommendations": [
+    "Consider adding 907 operations from Go Tests to Python Tests",
+    "Consider adding tests for 182 resource types from Go Tests to Python Tests"
+  ]
+}
+```
+
+### **Analyzing Suite Characteristics**
+
+**Test Type Distribution:**
+```bash
+# View test type breakdown for a specific suite
+jq '.test_distribution.by_type' eco-gotests_analysis.json
+
+# Compare test types between all suites
+for file in *_analysis.json; do
+  echo "=== $(basename $file _analysis.json) ==="
+  jq '.test_distribution.by_type' "$file"
+done
+```
+
+**Purpose Analysis:**
+```bash
+# Find most common purposes for a specific suite
+jq '.test_distribution.by_purpose' eco-gotests_analysis.json
+
+# Identify purpose gaps between all suites
+jq '.purpose_gaps' all_suite_comparisons.json
+```
+
+**Resource Coverage:**
+```bash
+# Top resources by usage for a specific suite
+jq '.resources | to_entries | sort_by(.value) | reverse | .[0:10]' eco-gotests_analysis.json
+
+# Resource gaps between all suites
+jq '.resource_gaps' all_suite_comparisons.json
+```
+
+**Operation Analysis:**
+```bash
+# Most common operations for a specific suite
+jq '.operations | to_entries | sort_by(.value) | reverse | .[0:10]' eco-gotests_analysis.json
+
+# Operation coverage metrics for all suites
+for file in *_analysis.json; do
+  echo "=== $(basename $file _analysis.json) ==="
+  jq '.coverage_metrics' "$file"
+done
+```
+
+### **Identifying Test Suite Gaps**
+
+**Coverage Gaps:**
+```bash
+# Find operations only in one suite
+jq '.operation_gaps.unique_to_suite1 | length' all_suite_comparisons.json
+jq '.operation_gaps.unique_to_suite2 | length' all_suite_comparisons.json
+
+# Find resource gaps between all suites
+jq '.resource_gaps.unique_to_suite1 | length' all_suite_comparisons.json
+jq '.resource_gaps.unique_to_suite2 | length' all_suite_comparisons.json
+```
+
+**Purpose Gaps:**
+```bash
+# Find missing purpose categories
+jq '.purpose_gaps' all_suite_comparisons.json
+
+# Compare purpose distribution across all suites
+for file in *_analysis.json; do
+  echo "=== $(basename $file _analysis.json) ==="
+  jq '.test_distribution.by_purpose' "$file"
+done
+```
+
+**Environment Gaps:**
+```bash
+# Find environment differences
+jq '.environment_gaps' all_suite_comparisons.json
+
+# Compare environment coverage across all suites
+for file in *_analysis.json; do
+  echo "=== $(basename $file _analysis.json) ==="
+  jq '.test_distribution.by_environment' "$file"
+done
+```
+
+### **Using Analysis for Test Planning**
+
+**Identify Missing Coverage:**
+```bash
+# Find operations with low coverage for a specific suite
+jq '.operations | to_entries | map(select(.value < 5)) | sort_by(.value)' eco-gotests_analysis.json
+
+# Find untested resource types across all suites
+for file in *_analysis.json; do
+  echo "=== $(basename $file _analysis.json) ==="
+  jq '.resources | to_entries | map(select(.value == 1)) | length' "$file"
+done
+```
+
+**Plan Cross-Language Testing:**
+```bash
+# Get recommendations for improving coverage
+jq '.recommendations' all_suite_comparisons.json
+
+# Find common operations to prioritize
+jq '.operation_gaps.common | length' all_suite_comparisons.json
+```
+
+**Quality Assessment:**
+```bash
+# Check test diversity across all suites
+for file in *_analysis.json; do
+  echo "=== $(basename $file _analysis.json) ==="
+  jq '.coverage_metrics | {test_type_diversity, purpose_diversity, avg_operations_per_test}' "$file"
+done
+```
+
+### **Manual Suite Analysis**
+
+You can also run the analyzer independently:
+
+```bash
+# Analyze individual suites
+python match/analyze_test_suites.py --go go_specs.jsonl --output analysis/
+python match/analyze_test_suites.py --py py_specs.jsonl --output analysis/
+
+# Compare all suites
+python match/analyze_test_suites.py --go go_specs.jsonl --py py_specs.jsonl --compare --output analysis/
 ```
 
 ## 📊 Purpose Categories
