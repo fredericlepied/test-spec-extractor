@@ -533,7 +533,7 @@ func detectNetworkingTech(testName, filePath string, comments []string) []string
 	}
 
 	// Check for virtualization patterns
-	virtPatterns := []string{"kvm", "qemu", "libvirt", "virt", "vm", "virtualization", "hypervisor", "container", "docker", "podman", "crio", "containerd"}
+	virtPatterns := []string{"kvm", "qemu", "libvirt", "virt", "vm", "virtualization", "hypervisor", "container", "docker", "podman", "crio", "containerd", "runc", "cri-o", "dockerfile", "buildah", "skopeo"}
 	for _, pattern := range virtPatterns {
 		if matched, _ := regexp.MatchString(pattern, content); matched {
 			networkingTech = append(networkingTech, "Virtualization")
@@ -582,6 +582,60 @@ func detectNetworkingTech(testName, filePath string, comments []string) []string
 	for _, pattern := range edgePatterns {
 		if matched, _ := regexp.MatchString(pattern, content); matched {
 			networkingTech = append(networkingTech, "Edge Computing")
+			break
+		}
+	}
+
+	// Check for networking protocols
+	protocolPatterns := []string{"tcp", "udp", "http", "https", "grpc", "websocket", "mqtt", "coap", "snmp", "bgp", "ospf", "isis", "ldp", "rsvp", "mpls", "vxlan", "geneve", "gre", "ipsec", "tls", "ssl"}
+	for _, pattern := range protocolPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Networking Protocols")
+			break
+		}
+	}
+
+	// Check for service mesh patterns
+	servicemeshPatterns := []string{"istio", "linkerd", "consul.*connect", "envoy", "service.*mesh", "sidecar", "proxy"}
+	for _, pattern := range servicemeshPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Service Mesh")
+			break
+		}
+	}
+
+	// Check for API gateway patterns
+	apigatewayPatterns := []string{"api.*gateway", "kong", "ambassador", "traefik", "nginx.*ingress", "haproxy", "api.*management"}
+	for _, pattern := range apigatewayPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "API Gateway")
+			break
+		}
+	}
+
+	// Check for database patterns
+	databasePatterns := []string{"postgresql", "mysql", "mongodb", "redis", "cassandra", "elasticsearch", "influxdb", "timescaledb", "database", "db", "sql", "nosql"}
+	for _, pattern := range databasePatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Database")
+			break
+		}
+	}
+
+	// Check for messaging patterns
+	messagingPatterns := []string{"kafka", "rabbitmq", "activemq", "nats", "pulsar", "message.*queue", "event.*streaming", "pub.*sub"}
+	for _, pattern := range messagingPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Messaging")
+			break
+		}
+	}
+
+	// Check for CI/CD patterns
+	cicdPatterns := []string{"jenkins", "gitlab.*ci", "github.*actions", "tekton", "argo", "flux", "ci.*cd", "continuous.*integration", "continuous.*deployment", "pipeline"}
+	for _, pattern := range cicdPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "CI/CD")
 			break
 		}
 	}

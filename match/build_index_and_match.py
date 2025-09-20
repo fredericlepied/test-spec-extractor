@@ -28,10 +28,16 @@ PURPOSE_COMPATIBILITY = {
     "POD_HEALTH": ["POD_MANAGEMENT"],  # Only direct pod-related purposes
     "NETWORK_POLICY": ["NETWORK_CONNECTIVITY"],  # Only network-related purposes
     "NETWORK_CONNECTIVITY": ["NETWORK_POLICY"],  # Only network-related purposes
-    "OPERATOR_MANAGEMENT": ["RESOURCE_VALIDATION", "UPGRADE_TESTING"],  # Only with resource validation and upgrade
+    "OPERATOR_MANAGEMENT": [
+        "RESOURCE_VALIDATION",
+        "UPGRADE_TESTING",
+    ],  # Only with resource validation and upgrade
     "STORAGE_TESTING": ["RESOURCE_VALIDATION"],  # Only with resource validation
     "SECURITY_TESTING": ["RESOURCE_VALIDATION"],  # Only with resource validation
-    "CONFIGURATION": ["RESOURCE_VALIDATION", "UPGRADE_TESTING"],  # Only with resource validation and upgrade
+    "CONFIGURATION": [
+        "RESOURCE_VALIDATION",
+        "UPGRADE_TESTING",
+    ],  # Only with resource validation and upgrade
     "PERFORMANCE": ["RESOURCE_VALIDATION"],  # Only with resource validation
     "RESOURCE_VALIDATION": [
         "OPERATOR_MANAGEMENT",
@@ -41,7 +47,11 @@ PURPOSE_COMPATIBILITY = {
         "PERFORMANCE",
     ],  # Removed network and pod purposes
     # Specialized testing purposes - only match with themselves or very specific others
-    "UPGRADE_TESTING": ["UPGRADE_TESTING", "OPERATOR_MANAGEMENT", "CONFIGURATION"],  # Upgrade can match with operator management and configuration
+    "UPGRADE_TESTING": [
+        "UPGRADE_TESTING",
+        "OPERATOR_MANAGEMENT",
+        "CONFIGURATION",
+    ],  # Upgrade can match with operator management and configuration
     "SRIOV_TESTING": [
         "SRIOV_TESTING",
         "NETWORK_POLICY",
@@ -81,38 +91,61 @@ PURPOSE_COMPATIBILITY = {
 # Resource compatibility matrix - defines which Kubernetes resources are compatible for matching
 RESOURCE_COMPATIBILITY = {
     # Pod-related resources
-    "v1/Pod": ["v1/Pod", "apps/v1/Deployment", "apps/v1/StatefulSet", "apps/v1/DaemonSet"],
+    "v1/Pod": [
+        "v1/Pod",
+        "apps/v1/Deployment",
+        "apps/v1/StatefulSet",
+        "apps/v1/DaemonSet",
+    ],
     "apps/v1/Deployment": ["v1/Pod", "apps/v1/Deployment", "apps/v1/StatefulSet"],
     "apps/v1/StatefulSet": ["v1/Pod", "apps/v1/Deployment", "apps/v1/StatefulSet"],
     "apps/v1/DaemonSet": ["v1/Pod", "apps/v1/DaemonSet"],
-    
     # Namespace-related resources
-    "v1/Namespace": ["v1/Namespace", "v1/Pod", "apps/v1/Deployment", "apps/v1/StatefulSet"],
-    
+    "v1/Namespace": [
+        "v1/Namespace",
+        "v1/Pod",
+        "apps/v1/Deployment",
+        "apps/v1/StatefulSet",
+    ],
     # Cluster management resources (incompatible with each other)
     "config.openshift.io/v1/ClusterVersion": ["config.openshift.io/v1/ClusterVersion"],
-    "hive.openshift.io/v1/ClusterDeployment": ["hive.openshift.io/v1/ClusterDeployment"],
+    "hive.openshift.io/v1/ClusterDeployment": [
+        "hive.openshift.io/v1/ClusterDeployment"
+    ],
     "metal3.io/v1alpha1/BareMetalHost": ["metal3.io/v1alpha1/BareMetalHost"],
-    
     # Network-related resources
     "v1/Service": ["v1/Service", "route.openshift.io/v1/Route"],
     "route.openshift.io/v1/Route": ["v1/Service", "route.openshift.io/v1/Route"],
-    
     # Storage-related resources
     "v1/PersistentVolume": ["v1/PersistentVolume", "v1/PersistentVolumeClaim"],
     "v1/PersistentVolumeClaim": ["v1/PersistentVolume", "v1/PersistentVolumeClaim"],
-    
     # Operator-related resources
-    "operators.coreos.com/v1alpha1/ClusterServiceVersion": ["operators.coreos.com/v1alpha1/ClusterServiceVersion"],
-    "operators.coreos.com/v1alpha1/Subscription": ["operators.coreos.com/v1alpha1/Subscription"],
+    "operators.coreos.com/v1alpha1/ClusterServiceVersion": [
+        "operators.coreos.com/v1alpha1/ClusterServiceVersion"
+    ],
+    "operators.coreos.com/v1alpha1/Subscription": [
+        "operators.coreos.com/v1alpha1/Subscription"
+    ],
 }
 
 # Technology compatibility matrix - expanded to include all technology domains
 TECH_COMPATIBILITY = {
     # Networking technologies
-    "SR-IOV": ["SR-IOV", "CNI", "Virtualization"],  # SR-IOV can match with CNI and virtualization
-    "PTP": ["PTP", "CNI", "Edge Computing"],  # PTP can match with CNI and edge computing
-    "DPDK": ["DPDK", "CNI", "Virtualization"],  # DPDK can match with CNI and virtualization
+    "SR-IOV": [
+        "SR-IOV",
+        "CNI",
+        "Virtualization",
+    ],  # SR-IOV can match with CNI and virtualization
+    "PTP": [
+        "PTP",
+        "CNI",
+        "Edge Computing",
+    ],  # PTP can match with CNI and edge computing
+    "DPDK": [
+        "DPDK",
+        "CNI",
+        "Virtualization",
+    ],  # DPDK can match with CNI and virtualization
     "MetalLB": ["MetalLB", "CNI"],  # MetalLB can match with CNI (both are networking)
     "RDMA": ["RDMA", "CNI", "Storage"],  # RDMA can match with CNI and storage
     "Bonding": ["Bonding", "CNI"],  # Bonding can match with CNI (both are networking)
@@ -126,30 +159,60 @@ TECH_COMPATIBILITY = {
         "CNI",
         "Virtualization",
     ],  # CNI is compatible with networking and virtualization
-    
     # Hardware acceleration
-    "GPU": ["GPU", "Machine Learning", "Virtualization"],  # GPU can match with ML and virtualization
-    
+    "GPU": [
+        "GPU",
+        "Machine Learning",
+        "Virtualization",
+    ],  # GPU can match with ML and virtualization
     # Virtualization
-    "Virtualization": ["SR-IOV", "DPDK", "CNI", "GPU", "Storage", "Security"],  # Virtualization is compatible with many technologies
-    
+    "Virtualization": [
+        "SR-IOV",
+        "DPDK",
+        "CNI",
+        "GPU",
+        "Storage",
+        "Security",
+    ],  # Virtualization is compatible with many technologies
     # Storage
-    "Storage": ["RDMA", "Virtualization", "Security", "Monitoring"],  # Storage can match with RDMA, virtualization, security, monitoring
-    
+    "Storage": [
+        "RDMA",
+        "Virtualization",
+        "Security",
+        "Monitoring",
+    ],  # Storage can match with RDMA, virtualization, security, monitoring
     # Security
-    "Security": ["Virtualization", "Storage", "Monitoring", "Edge Computing"],  # Security is compatible with many domains
-    
+    "Security": [
+        "Virtualization",
+        "Storage",
+        "Monitoring",
+        "Edge Computing",
+    ],  # Security is compatible with many domains
     # Monitoring/Observability
-    "Monitoring": ["Storage", "Security", "Edge Computing", "Machine Learning"],  # Monitoring is compatible with many domains
-    
+    "Monitoring": [
+        "Storage",
+        "Security",
+        "Edge Computing",
+        "Machine Learning",
+    ],  # Monitoring is compatible with many domains
     # Machine Learning/AI
-    "Machine Learning": ["GPU", "Edge Computing", "Monitoring"],  # ML can match with GPU, edge computing, monitoring
-    
+    "Machine Learning": [
+        "GPU",
+        "Edge Computing",
+        "Monitoring",
+    ],  # ML can match with GPU, edge computing, monitoring
     # Edge Computing
-    "Edge Computing": ["PTP", "Security", "Monitoring", "Machine Learning"],  # Edge computing is compatible with time-sensitive and monitoring tech
-    
+    "Edge Computing": [
+        "PTP",
+        "Security",
+        "Monitoring",
+        "Machine Learning",
+    ],  # Edge computing is compatible with time-sensitive and monitoring tech
     # Power Management
-    "Power Management": ["Power Management", "Edge Computing"],  # Power management can match with edge computing
+    "Power Management": [
+        "Power Management",
+        "Edge Computing",
+    ],  # Power management can match with edge computing
 }
 
 
@@ -171,14 +234,14 @@ def is_resource_compatible(resources_a: List[str], resources_b: List[str]) -> bo
     """Check if two sets of Kubernetes resources are compatible for matching."""
     if not resources_a or not resources_b:
         return True  # Allow matches if no resources specified
-    
+
     # Check if any resource from test A is compatible with any resource from test B
     for res1 in resources_a:
         for res2 in resources_b:
             compatible_resources = RESOURCE_COMPATIBILITY.get(res1, [])
             if res2 in compatible_resources:
                 return True
-    
+
     return False
 
 
@@ -186,18 +249,18 @@ def is_tech_compatible(tech_a: List[str], tech_b: List[str]) -> bool:
     """Check if two sets of technologies are compatible for matching."""
     if not tech_a or not tech_b:
         return True  # Allow matches if no tech specified
-    
+
     # If either test has no tech, allow the match
     if not tech_a or not tech_b:
         return True
-    
+
     # Check if any technology from test A is compatible with any technology from test B
     for tech1 in tech_a:
         for tech2 in tech_b:
             compatible_techs = TECH_COMPATIBILITY.get(tech1, [])
             if tech2 in compatible_techs:
                 return True
-    
+
     return False
 
 
@@ -709,11 +772,11 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
 
             if purpose_a and purpose_b:
                 if purpose_a == purpose_b:
-                    purpose_boost = 0.20  # Same purpose gets significant boost
+                    purpose_boost = 0.05  # Same purpose gets small boost
                 elif is_purpose_compatible(purpose_a, purpose_b):
-                    purpose_boost = 0.10  # Compatible purposes get moderate boost
+                    purpose_boost = 0.025  # Compatible purposes get tiny boost
                 else:
-                    purpose_boost = -0.30  # Incompatible purposes get penalty
+                    purpose_boost = -0.08  # Incompatible purposes get small penalty
 
             # Networking technology compatibility scoring
             tech_a = specs_a[i].get("tech", [])
@@ -723,19 +786,19 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
             if tech_a and tech_b:
                 common_techs = set(tech_a) & set(tech_b)
                 if common_techs:
-                    tech_boost = 0.15 * len(
-                        common_techs
-                    )  # Boost for common technologies
+                    tech_boost = 0.04 * min(
+                        len(common_techs), 2
+                    )  # Smaller boost for common technologies
                 elif is_tech_compatible(tech_a, tech_b):
-                    tech_boost = 0.08  # Moderate boost for compatible technologies
+                    tech_boost = 0.02  # Tiny boost for compatible technologies
                 else:
-                    tech_boost = -0.20  # Penalty for incompatible technologies
+                    tech_boost = -0.03  # Tiny penalty for incompatible technologies
 
             # Functional similarity scoring
             functional_score = calculate_functional_similarity(specs_a[i], specs_b[j])
             functional_boost = (
-                functional_score * 0.25
-            )  # Boost based on functional similarity
+                functional_score * 0.08
+            )  # Much smaller boost based on functional similarity
 
             if shared:
                 # Count different types of shared signals
@@ -755,21 +818,21 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
                 # Boost based on signal types (exact > category > verb_group > resource)
                 signal_boost = 0.0
                 if exact_count > 0:
-                    signal_boost += (
-                        0.15 * exact_count
-                    )  # Highest boost for exact matches
+                    signal_boost += 0.03 * min(
+                        exact_count, 2
+                    )  # Much smaller boost for exact matches, capped at 2
                 if category_count > 0:
-                    signal_boost += (
-                        0.12 * category_count
-                    )  # High boost for category matches
+                    signal_boost += 0.025 * min(
+                        category_count, 2
+                    )  # Much smaller boost for category matches, capped at 2
                 if verb_group_count > 0:
-                    signal_boost += (
-                        0.10 * verb_group_count
-                    )  # Medium boost for verb group matches
+                    signal_boost += 0.02 * min(
+                        verb_group_count, 2
+                    )  # Much smaller boost for verb group matches, capped at 2
                 if resource_count > 0:
-                    signal_boost += (
-                        0.08 * resource_count
-                    )  # Lower boost for resource matches
+                    signal_boost += 0.015 * min(
+                        resource_count, 2
+                    )  # Much smaller boost for resource matches, capped at 2
 
                 boosted_score = min(
                     1.0,

@@ -433,6 +433,11 @@ def detect_tech(test_name: str, file_path: str, docstring: str) -> list:
         "podman",
         "crio",
         "containerd",
+        "runc",
+        "cri-o",
+        "dockerfile",
+        "buildah",
+        "skopeo",
     ]
     for pattern in virt_patterns:
         if re.search(pattern, content):
@@ -534,6 +539,119 @@ def detect_tech(test_name: str, file_path: str, docstring: str) -> list:
             tech.append("Edge Computing")
             break
 
+    # Check for networking protocols
+    protocol_patterns = [
+        "tcp",
+        "udp",
+        "http",
+        "https",
+        "grpc",
+        "websocket",
+        "mqtt",
+        "coap",
+        "snmp",
+        "bgp",
+        "ospf",
+        "isis",
+        "ldp",
+        "rsvp",
+        "mpls",
+        "vxlan",
+        "geneve",
+        "gre",
+        "ipsec",
+        "tls",
+        "ssl",
+    ]
+    for pattern in protocol_patterns:
+        if re.search(pattern, content):
+            tech.append("Networking Protocols")
+            break
+
+    # Check for service mesh patterns
+    servicemesh_patterns = [
+        "istio",
+        "linkerd",
+        "consul.*connect",
+        "envoy",
+        "service.*mesh",
+        "sidecar",
+        "proxy",
+    ]
+    for pattern in servicemesh_patterns:
+        if re.search(pattern, content):
+            tech.append("Service Mesh")
+            break
+
+    # Check for API gateway patterns
+    apigateway_patterns = [
+        "api.*gateway",
+        "kong",
+        "ambassador",
+        "traefik",
+        "nginx.*ingress",
+        "haproxy",
+        "api.*management",
+    ]
+    for pattern in apigateway_patterns:
+        if re.search(pattern, content):
+            tech.append("API Gateway")
+            break
+
+    # Check for database patterns
+    database_patterns = [
+        "postgresql",
+        "mysql",
+        "mongodb",
+        "redis",
+        "cassandra",
+        "elasticsearch",
+        "influxdb",
+        "timescaledb",
+        "database",
+        "db",
+        "sql",
+        "nosql",
+    ]
+    for pattern in database_patterns:
+        if re.search(pattern, content):
+            tech.append("Database")
+            break
+
+    # Check for messaging patterns
+    messaging_patterns = [
+        "kafka",
+        "rabbitmq",
+        "activemq",
+        "nats",
+        "pulsar",
+        "message.*queue",
+        "event.*streaming",
+        "pub.*sub",
+    ]
+    for pattern in messaging_patterns:
+        if re.search(pattern, content):
+            tech.append("Messaging")
+            break
+
+    # Check for CI/CD patterns
+    cicd_patterns = [
+        "jenkins",
+        "gitlab.*ci",
+        "github.*actions",
+        "tekton",
+        "argo",
+        "flux",
+        "ci.*cd",
+        "continuous.*integration",
+        "continuous.*deployment",
+        "pipeline",
+    ]
+    for pattern in cicd_patterns:
+        if re.search(pattern, content):
+            tech.append("CI/CD")
+            break
+
     return tech
 
 
@@ -573,8 +691,10 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
 
         if len(ops) == 1 and len(comparators) == 1:
             condition = f"{left} {ops[0]} {comparators[0]}"
-            # Standardized target classification for similarity search compatibility
+            # Enhanced target classification for similarity search compatibility
             target = "test_condition"  # Default to match Go extractor
+
+            # Resource count patterns
             if "len(" in left and any(
                 resource in left.lower()
                 for resource in [
@@ -583,20 +703,71 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
                     "namespace",
                     "pod",
                     "service",
+                    "pvc",
+                    "pv",
+                    "deployment",
+                    "replicaset",
+                    "statefulset",
+                    "daemonset",
+                    "configmap",
+                    "secret",
+                    "ingress",
+                    "route",
+                    "networkpolicy",
+                    "scc",
+                    "subscription",
+                    "csv",
+                    "operatorgroup",
+                    "policy",
+                    "managedcluster",
                 ]
             ):
                 target = "resource_count"
-            elif "online" in left.lower() or "status" in left.lower():
+            # Resource status patterns
+            elif any(
+                status in left.lower()
+                for status in [
+                    "online",
+                    "status",
+                    "phase",
+                    "state",
+                    "ready",
+                    "running",
+                    "bound",
+                    "available",
+                    "active",
+                    "healthy",
+                    "succeeded",
+                    "failed",
+                    "pending",
+                ]
+            ):
                 target = "resource_status"
-            elif (
-                "deleted" in left.lower()
-                or "not in" in condition
-                or "empty" in condition.lower()
+            # Resource version patterns
+            elif any(
+                version in left.lower()
+                for version in [
+                    "version",
+                    "generation",
+                    "resourceversion",
+                    "uid",
+                    "creationtimestamp",
+                ]
+            ):
+                target = "resource_version"
+            # Resource deletion patterns
+            elif any(
+                deletion in left.lower()
+                for deletion in [
+                    "deleted",
+                    "removed",
+                    "not found",
+                    "absent",
+                    "empty",
+                    "none",
+                ]
             ):
                 target = "resource_deletion"
-            elif "version" in left.lower() or "image" in left.lower():
-                target = "resource_version"
-
             return {"target": target, "condition": condition}
 
     # Handle membership tests (in, not in)
@@ -624,6 +795,75 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
         condition = f" {op} ".join(values)
         return {"target": "compound_condition", "condition": condition}
 
+    # Handle unittest-style assertions (self.assertEqual, self.assertTrue, etc.)
+    elif isinstance(assert_node.test, ast.Call) and isinstance(
+        assert_node.test.func, ast.Attribute
+    ):
+        func_name = assert_node.test.func.attr
+        args = [ast_to_string(arg) for arg in assert_node.test.args]
+
+        if func_name in ["assertEqual", "assertEquals"] and len(args) >= 2:
+            condition = f"{args[0]} == {args[1]}"
+            target = "test_condition"
+            if "len(" in args[0] and any(
+                resource in args[0].lower()
+                for resource in [
+                    "baremetalhost",
+                    "clusterdeployment",
+                    "namespace",
+                    "pod",
+                    "service",
+                    "pvc",
+                    "pv",
+                    "deployment",
+                    "replicaset",
+                    "statefulset",
+                    "daemonset",
+                ]
+            ):
+                target = "resource_count"
+            return {"target": target, "condition": condition}
+        elif func_name in ["assertTrue", "assertFalse"] and len(args) >= 1:
+            condition = f"{args[0]} is {func_name == 'assertTrue'}"
+            return {"target": "test_condition", "condition": condition}
+        elif func_name in ["assertIn", "assertNotIn"] and len(args) >= 2:
+            condition = (
+                f"{args[1]} {'in' if func_name == 'assertIn' else 'not in'} {args[0]}"
+            )
+            return {"target": "test_condition", "condition": condition}
+        elif func_name in ["assertIsNone", "assertIsNotNone"] and len(args) >= 1:
+            condition = (
+                f"{args[0]} is {'None' if func_name == 'assertIsNone' else 'not None'}"
+            )
+            return {"target": "test_condition", "condition": condition}
+        else:
+            condition = f"{func_name}({', '.join(args)})"
+            return {"target": "test_condition", "condition": condition}
+
+    # Handle pytest-style assertions (pytest.raises, etc.)
+    elif isinstance(assert_node.test, ast.Call) and isinstance(
+        assert_node.test.func, ast.Attribute
+    ):
+        if hasattr(assert_node.test.func, "value") and isinstance(
+            assert_node.test.func.value, ast.Name
+        ):
+            if (
+                assert_node.test.func.value.id == "pytest"
+                and assert_node.test.func.attr == "raises"
+            ):
+                condition = f"pytest.raises({', '.join(ast_to_string(arg) for arg in assert_node.test.args)})"
+                return {"target": "test_condition", "condition": condition}
+
+    # Handle simple boolean assertions
+    elif isinstance(assert_node.test, ast.NameConstant):
+        condition = str(assert_node.test.value)
+        return {"target": "test_condition", "condition": condition}
+
+    # Handle call expressions (e.g., assert some_function())
+    elif isinstance(assert_node.test, ast.Call):
+        condition = ast_to_string(assert_node.test)
+        return {"target": "test_condition", "condition": condition}
+
     # Generic assertion
     condition = ast_to_string(assert_node.test)
     return {"target": "test_condition", "condition": condition}
@@ -634,10 +874,39 @@ class TestVisitor(ast.NodeVisitor):
         self.path = path
         self.root_path = root_path
         self.specs = []
+        self.imports = {}  # Track imports for cross-file detection
+        self.imported_modules = set()  # Track imported modules
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
-        if not node.name.startswith("test"):
+        # Enhanced test function detection patterns
+        is_test_function = (
+            node.name.startswith("test")  # pytest style
+            or node.name.startswith("Test")  # unittest style
+            or node.name.startswith("test_")  # explicit pytest style
+            or node.name.startswith("test_")  # explicit test prefix
+            or any(
+                decorator.id == "pytest.mark.parametrize"
+                or (hasattr(decorator, "attr") and decorator.attr == "parametrize")
+                for decorator in node.decorator_list
+                if hasattr(decorator, "id") or hasattr(decorator, "attr")
+            )  # pytest parametrize
+            or any(
+                hasattr(decorator, "id")
+                and decorator.id
+                in [
+                    "retry",
+                    "retry_if_exception_type",
+                    "stop_after_attempt",
+                    "wait_fixed",
+                ]
+                for decorator in node.decorator_list
+                if hasattr(decorator, "id")
+            )  # retry decorators
+        )
+
+        if not is_test_function:
             return
+
         # Create test_id with basename substitution
         basename = os.path.basename(self.root_path)
         relative_path = os.path.relpath(self.path, self.root_path)
@@ -660,25 +929,49 @@ class TestVisitor(ast.NodeVisitor):
                 and getattr(dec.func, "attr", "") == "parametrize"
             ):
                 spec["dependencies"].append("parametrized")
+        # First, detect cross-file actions
+        cross_file_actions = self.detect_cross_file_actions(node)
+        spec["actions"].extend(cross_file_actions)
+
         for n in ast.walk(node):
             if isinstance(n, ast.Call):
                 func = n.func
 
-                # Check for direct helper function calls (e.g., get_resource, get_resource_from_namespace)
+                # Check for direct helper function calls
                 if isinstance(func, ast.Name) and func.id in [
                     "get_resource",
                     "get_resource_from_namespace",
+                    "get_namespaces",
+                    "create_api_object",
+                    "delete_object",
                 ]:
-                    if n.args and isinstance(n.args[0], ast.Constant):
-                        resource_name = n.args[0].value
-                        gvk = map_resource_name_to_gvk(resource_name)
-                        if gvk:
-                            spec["actions"].append({"gvk": gvk, "verb": "get"})
-                    elif n.args:
-                        # For any arguments (including variables), add a generic action
+                    if func.id == "get_namespaces":
+                        # get_namespaces() -> v1/Namespace:list
+                        spec["actions"].append({"gvk": "v1/Namespace", "verb": "list"})
+                    elif func.id == "create_api_object":
+                        # create_api_object() -> generic create operation
                         spec["actions"].append(
-                            {"gvk": "unknown/unknown", "verb": "get"}
+                            {"gvk": "unknown/unknown", "verb": "create"}
                         )
+                    elif func.id == "delete_object":
+                        # delete_object() -> generic delete operation
+                        spec["actions"].append(
+                            {"gvk": "unknown/unknown", "verb": "delete"}
+                        )
+                    elif func.id in ["get_resource", "get_resource_from_namespace"]:
+                        if n.args and isinstance(n.args[0], ast.Constant):
+                            resource_name = n.args[0].value
+                            gvk = map_resource_name_to_gvk(resource_name)
+                            if gvk:
+                                # Determine verb based on function name and arguments
+                                verb = "list" if func.id == "get_resource" else "get"
+                                spec["actions"].append({"gvk": gvk, "verb": verb})
+                        elif n.args:
+                            # For any arguments (including variables), add a generic action
+                            verb = "list" if func.id == "get_resource" else "get"
+                            spec["actions"].append(
+                                {"gvk": "unknown/unknown", "verb": verb}
+                            )
 
                 # Check for attribute-based calls
                 elif isinstance(func, ast.Attribute):
@@ -705,21 +998,48 @@ class TestVisitor(ast.NodeVisitor):
                                 if gvk:
                                     spec["actions"].append({"gvk": gvk, "verb": "get"})
 
-                    # Check for imported helper function calls (e.g., from oc_helpers import get_resource)
+                    # Check for imported helper function calls
                     if func.attr in [
                         "get_resource",
                         "get_resource_from_namespace",
+                        "get_namespaces",
+                        "create_api_object",
+                        "delete_object",
                     ]:
-                        if n.args and isinstance(n.args[0], ast.Constant):
-                            resource_name = n.args[0].value
-                            gvk = map_resource_name_to_gvk(resource_name)
-                            if gvk:
-                                spec["actions"].append({"gvk": gvk, "verb": "get"})
-                        elif n.args:
-                            # For any arguments (including variables), add a generic action
+                        if func.attr == "get_namespaces":
+                            # get_namespaces() -> v1/Namespace:list
                             spec["actions"].append(
-                                {"gvk": "unknown/unknown", "verb": "get"}
+                                {"gvk": "v1/Namespace", "verb": "list"}
                             )
+                        elif func.attr == "create_api_object":
+                            # create_api_object() -> generic create operation
+                            spec["actions"].append(
+                                {"gvk": "unknown/unknown", "verb": "create"}
+                            )
+                        elif func.attr == "delete_object":
+                            # delete_object() -> generic delete operation
+                            spec["actions"].append(
+                                {"gvk": "unknown/unknown", "verb": "delete"}
+                            )
+                        elif func.attr in [
+                            "get_resource",
+                            "get_resource_from_namespace",
+                        ]:
+                            if n.args and isinstance(n.args[0], ast.Constant):
+                                resource_name = n.args[0].value
+                                gvk = map_resource_name_to_gvk(resource_name)
+                                if gvk:
+                                    # Determine verb based on function name
+                                    verb = (
+                                        "list" if func.attr == "get_resource" else "get"
+                                    )
+                                    spec["actions"].append({"gvk": gvk, "verb": verb})
+                            elif n.args:
+                                # For any arguments (including variables), add a generic action
+                                verb = "list" if func.attr == "get_resource" else "get"
+                                spec["actions"].append(
+                                    {"gvk": "unknown/unknown", "verb": verb}
+                                )
                 if isinstance(func, ast.Attribute) and func.attr in {
                     "run",
                     "check_call",
@@ -815,9 +1135,7 @@ class TestVisitor(ast.NodeVisitor):
             detect_dependencies(node.name, self.path, docstring, spec["actions"])
         )
         spec["environment"] = detect_environment(node.name, self.path, docstring)
-        spec["tech"] = detect_tech(
-            node.name, self.path, docstring
-        )
+        spec["tech"] = detect_tech(node.name, self.path, docstring)
 
         # Detect purpose based on test content
         spec["purpose"] = detect_purpose(
@@ -825,6 +1143,307 @@ class TestVisitor(ast.NodeVisitor):
         )
 
         self.specs.append(spec)
+
+    def visit_ClassDef(self, node: ast.ClassDef):
+        # Enhanced test class detection patterns
+        is_test_class = (
+            node.name.startswith("Test")  # unittest style
+            or node.name.startswith("test")  # pytest style
+            or any(
+                base.id == "TestCase" for base in node.bases if hasattr(base, "id")
+            )  # unittest.TestCase
+            or any(
+                hasattr(base, "id") and base.id in ["unittest.TestCase", "TestCase"]
+                for base in node.bases
+                if hasattr(base, "id")
+            )  # unittest.TestCase
+            or any(
+                hasattr(base, "attr") and base.attr == "TestCase"
+                for base in node.bases
+                if hasattr(base, "attr")
+            )  # unittest.TestCase
+        )
+
+        if not is_test_class:
+            return
+
+        # Process test methods in the class
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef) and item.name.startswith("test"):
+                # Create test_id with basename substitution
+                basename = os.path.basename(self.root_path)
+                relative_path = os.path.relpath(self.path, self.root_path)
+                spec = {
+                    "test_id": f"{basename}/{relative_path}:{node.name}.{item.name}",
+                    "test_type": "unit",  # Class-based tests are typically unit tests
+                    "dependencies": [],
+                    "environment": [],
+                    "actions": [],
+                    "expectations": [],
+                    "openshift_specific": [],
+                    "concurrency": [],
+                    "artifacts": [],
+                    "purpose": "",
+                    "tech": [],
+                }
+
+                # Extract docstring
+                docstring = ast.get_docstring(item)
+                if docstring:
+                    spec["purpose"] = detect_purpose(
+                        item.name, docstring, spec["actions"], spec["expectations"]
+                    )
+                else:
+                    spec["purpose"] = "UNKNOWN"
+
+                # Detect test type, dependencies, environment
+                spec["test_type"] = detect_test_type(item.name, self.path, docstring)
+                spec["dependencies"] = detect_dependencies(
+                    item.name, self.path, docstring
+                )
+                spec["environment"] = detect_environment(
+                    item.name, self.path, docstring
+                )
+
+                # Process function body for actions and expectations
+                # First, detect cross-file actions
+                cross_file_actions = self.detect_cross_file_actions(item)
+                spec["actions"].extend(cross_file_actions)
+
+                for n in ast.walk(item):
+                    if isinstance(n, ast.Call):
+                        # Check for direct helper function calls
+                        if isinstance(n.func, ast.Name) and n.func.id in [
+                            "get_resource",
+                            "get_resource_from_namespace",
+                            "get_namespaces",
+                            "create_api_object",
+                            "delete_object",
+                        ]:
+                            if n.func.id == "get_namespaces":
+                                spec["actions"].append(
+                                    {"gvk": "v1/Namespace", "verb": "list"}
+                                )
+                            elif n.func.id == "create_api_object":
+                                spec["actions"].append(
+                                    {"gvk": "unknown/unknown", "verb": "create"}
+                                )
+                            elif n.func.id == "delete_object":
+                                spec["actions"].append(
+                                    {"gvk": "unknown/unknown", "verb": "delete"}
+                                )
+                            elif n.func.id in [
+                                "get_resource",
+                                "get_resource_from_namespace",
+                            ]:
+                                if n.args and isinstance(n.args[0], ast.Constant):
+                                    resource_name = n.args[0].value
+                                    gvk = map_resource_name_to_gvk(resource_name)
+                                    if gvk:
+                                        verb = (
+                                            "list"
+                                            if n.func.id == "get_resource"
+                                            else "get"
+                                        )
+                                        spec["actions"].append(
+                                            {"gvk": gvk, "verb": verb}
+                                        )
+                                elif n.args:
+                                    verb = (
+                                        "list" if n.func.id == "get_resource" else "get"
+                                    )
+                                    spec["actions"].append(
+                                        {"gvk": "unknown/unknown", "verb": verb}
+                                    )
+                        # Check for imported helper function calls (e.g., oc_helpers.get_resource)
+                        elif isinstance(n.func, ast.Attribute) and n.func.attr in [
+                            "get_resource",
+                            "get_resource_from_namespace",
+                            "get_namespaces",
+                            "create_api_object",
+                            "delete_object",
+                        ]:
+                            if n.func.attr == "get_namespaces":
+                                spec["actions"].append(
+                                    {"gvk": "v1/Namespace", "verb": "list"}
+                                )
+                            elif n.func.attr == "create_api_object":
+                                spec["actions"].append(
+                                    {"gvk": "unknown/unknown", "verb": "create"}
+                                )
+                            elif n.func.attr == "delete_object":
+                                spec["actions"].append(
+                                    {"gvk": "unknown/unknown", "verb": "delete"}
+                                )
+                            elif n.func.attr in [
+                                "get_resource",
+                                "get_resource_from_namespace",
+                            ]:
+                                if n.args and isinstance(n.args[0], ast.Constant):
+                                    resource_name = n.args[0].value
+                                    gvk = map_resource_name_to_gvk(resource_name)
+                                    if gvk:
+                                        verb = (
+                                            "list"
+                                            if n.func.attr == "get_resource"
+                                            else "get"
+                                        )
+                                        spec["actions"].append(
+                                            {"gvk": gvk, "verb": verb}
+                                        )
+                                elif n.args:
+                                    verb = (
+                                        "list"
+                                        if n.func.attr == "get_resource"
+                                        else "get"
+                                    )
+                                    spec["actions"].append(
+                                        {"gvk": "unknown/unknown", "verb": verb}
+                                    )
+                        # Check for subprocess calls (CLI commands)
+                        elif isinstance(n.func, ast.Attribute) and n.func.attr == "run":
+                            if (
+                                isinstance(n.func.value, ast.Name)
+                                and n.func.value.id == "subprocess"
+                            ):
+                                if n.args and isinstance(n.args[0], ast.List):
+                                    cmd_parts = []
+                                    for arg in n.args[0].elts:
+                                        if isinstance(arg, ast.Constant):
+                                            cmd_parts.append(arg.value)
+                                    if cmd_parts:
+                                        cmd = " ".join(cmd_parts)
+                                        gvk, verb = map_command_to_api(cmd)
+                                        if gvk and verb:
+                                            spec["actions"].append(
+                                                {"gvk": gvk, "verb": verb}
+                                            )
+                    elif isinstance(n, ast.Assert):
+                        expectation = extract_assertion_expectation(n)
+                        if expectation:
+                            spec["expectations"].append(expectation)
+
+                # Add tech detection
+                spec["tech"] = detect_tech(item.name, self.path, docstring)
+
+                self.specs.append(spec)
+
+    def visit_Import(self, node: ast.Import):
+        """Track import statements for cross-file detection"""
+        for alias in node.names:
+            if alias.asname:
+                self.imports[alias.asname] = alias.name
+            else:
+                self.imports[alias.name] = alias.name
+            self.imported_modules.add(alias.name)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom):
+        """Track from-import statements for cross-file detection"""
+        module_name = node.module or ""
+        for alias in node.names:
+            if alias.asname:
+                self.imports[alias.asname] = f"{module_name}.{alias.name}"
+            else:
+                self.imports[alias.name] = f"{module_name}.{alias.name}"
+            self.imported_modules.add(module_name)
+
+    def detect_cross_file_actions(self, node: ast.FunctionDef) -> list:
+        """Detect actions from cross-file function calls"""
+        actions = []
+
+        for n in ast.walk(node):
+            if isinstance(n, ast.Call):
+                # Check for calls to imported functions
+                if isinstance(n.func, ast.Name) and n.func.id in self.imports:
+                    imported_name = self.imports[n.func.id]
+                    # Check if it's a known helper function
+                    if any(
+                        helper in imported_name
+                        for helper in [
+                            "get_resource",
+                            "get_resource_from_namespace",
+                            "get_namespaces",
+                            "create_api_object",
+                            "delete_object",
+                            "oc_helpers",
+                        ]
+                    ):
+                        if "get_namespaces" in imported_name:
+                            actions.append({"gvk": "v1/Namespace", "verb": "list"})
+                        elif "create_api_object" in imported_name:
+                            actions.append({"gvk": "unknown/unknown", "verb": "create"})
+                        elif "delete_object" in imported_name:
+                            actions.append({"gvk": "unknown/unknown", "verb": "delete"})
+                        elif "get_resource" in imported_name:
+                            if n.args and isinstance(n.args[0], ast.Constant):
+                                resource_name = n.args[0].value
+                                gvk = map_resource_name_to_gvk(resource_name)
+                                if gvk:
+                                    verb = (
+                                        "list"
+                                        if "get_resource" in imported_name
+                                        else "get"
+                                    )
+                                    actions.append({"gvk": gvk, "verb": verb})
+                            else:
+                                verb = (
+                                    "list" if "get_resource" in imported_name else "get"
+                                )
+                                actions.append({"gvk": "unknown/unknown", "verb": verb})
+
+                # Check for calls to functions from imported modules
+                elif isinstance(n.func, ast.Attribute):
+                    if (
+                        isinstance(n.func.value, ast.Name)
+                        and n.func.value.id in self.imports
+                    ):
+                        module_name = self.imports[n.func.value.id]
+                        func_name = n.func.attr
+
+                        # Check for common patterns in eco-pytests
+                        if any(
+                            pattern in module_name
+                            for pattern in ["oc_helpers", "utils", "eco_pytests"]
+                        ) and func_name in [
+                            "get_resource",
+                            "get_resource_from_namespace",
+                            "get_namespaces",
+                            "create_api_object",
+                            "delete_object",
+                        ]:
+                            if func_name == "get_namespaces":
+                                actions.append({"gvk": "v1/Namespace", "verb": "list"})
+                            elif func_name == "create_api_object":
+                                actions.append(
+                                    {"gvk": "unknown/unknown", "verb": "create"}
+                                )
+                            elif func_name == "delete_object":
+                                actions.append(
+                                    {"gvk": "unknown/unknown", "verb": "delete"}
+                                )
+                            elif func_name in [
+                                "get_resource",
+                                "get_resource_from_namespace",
+                            ]:
+                                if n.args and isinstance(n.args[0], ast.Constant):
+                                    resource_name = n.args[0].value
+                                    gvk = map_resource_name_to_gvk(resource_name)
+                                    if gvk:
+                                        verb = (
+                                            "list"
+                                            if func_name == "get_resource"
+                                            else "get"
+                                        )
+                                        actions.append({"gvk": gvk, "verb": verb})
+                                else:
+                                    verb = (
+                                        "list" if func_name == "get_resource" else "get"
+                                    )
+                                    actions.append(
+                                        {"gvk": "unknown/unknown", "verb": verb}
+                                    )
+
+        return actions
 
 
 def guess_gvk_from_attr(attr: ast.Attribute) -> str:
@@ -875,6 +1494,23 @@ def map_resource_name_to_gvk(resource_name: str) -> str:
         "clusterdeployment": "hive.openshift.io/v1/ClusterDeployment",
         "agentclusterinstalls": "extensions.hive.openshift.io/v1beta1/AgentClusterInstall",
         "agentclusterinstall": "extensions.hive.openshift.io/v1beta1/AgentClusterInstall",
+        # Additional resources found in tests
+        "policies": "policy.open-cluster-management.io/v1/Policy",
+        "policy": "policy.open-cluster-management.io/v1/Policy",
+        "managedclusters": "cluster.open-cluster-management.io/v1/ManagedCluster",
+        "managedcluster": "cluster.open-cluster-management.io/v1/ManagedCluster",
+        "persistentvolumes": "v1/PersistentVolume",
+        "persistentvolume": "v1/PersistentVolume",
+        "persistentvolumeclaims": "v1/PersistentVolumeClaim",
+        "persistentvolumeclaim": "v1/PersistentVolumeClaim",
+        "nodes": "v1/Node",
+        "node": "v1/Node",
+        "daemonsets": "apps/v1/DaemonSet",
+        "daemonset": "apps/v1/DaemonSet",
+        "replicasets": "apps/v1/ReplicaSet",
+        "replicaset": "apps/v1/ReplicaSet",
+        "statefulsets": "apps/v1/StatefulSet",
+        "statefulset": "apps/v1/StatefulSet",
     }
 
     return resource_map.get(resource_name, "")
