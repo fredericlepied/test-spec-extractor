@@ -43,6 +43,7 @@ The pipeline generates:
 - `test_coverage.csv`: Coverage matrix of operations across test suites
 - `go_specs.jsonl` / `py_specs.jsonl`: Raw extracted test specifications
 - `*_analysis.json`: Individual test suite analyses (one per repository)
+- `*_report.md`: High-level reports for test suite owners (one per repository)
 - `all_suite_comparisons.json`: Comprehensive cross-suite comparisons
 
 ## 📊 Analyzing Results
@@ -413,6 +414,28 @@ python match/analyze_test_suites.py --py py_specs.jsonl --output analysis/
 # Compare all suites
 python match/analyze_test_suites.py --go go_specs.jsonl --py py_specs.jsonl --compare --output analysis/
 ```
+
+### **Generating High-Level Reports**
+
+Generate human-readable reports for test suite owners:
+
+```bash
+# Generate report for a specific suite
+python match/generate_suite_report.py eco-gotests_analysis.json -o eco-gotests_report.md
+
+# Generate reports for all suites
+for file in *_analysis.json; do
+    suite_name=$(basename "$file" _analysis.json)
+    python match/generate_suite_report.py "$file" -o "${suite_name}_report.md"
+done
+```
+
+**Report Contents:**
+- **Executive Summary**: Test counts, types, purposes, and environments
+- **Coverage Analysis**: Most tested resources and operations
+- **Quality Metrics**: Test diversity and complexity analysis
+- **Key Insights & Recommendations**: Automated analysis and suggestions
+- **Validation Questions**: Specific questions for test suite owners to validate accuracy
 
 ## 📊 Purpose Categories
 
