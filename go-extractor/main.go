@@ -39,6 +39,40 @@ type KubeSpec struct {
 	NetworkingTech    []string            `json:"networking_tech"` // SR-IOV, PTP, DPDK, GPU, etc.
 }
 
+// MarshalJSON ensures that nil slices are marshaled as empty arrays instead of null
+func (ks KubeSpec) MarshalJSON() ([]byte, error) {
+	// Create a type alias to avoid infinite recursion
+	type Alias KubeSpec
+
+	// Ensure all slices are non-nil
+	if ks.Dependencies == nil {
+		ks.Dependencies = []string{}
+	}
+	if ks.Environment == nil {
+		ks.Environment = []string{}
+	}
+	if ks.Actions == nil {
+		ks.Actions = []Action{}
+	}
+	if ks.Expectations == nil {
+		ks.Expectations = []map[string]string{}
+	}
+	if ks.OpenShiftSpecific == nil {
+		ks.OpenShiftSpecific = []string{}
+	}
+	if ks.Concurrency == nil {
+		ks.Concurrency = []string{}
+	}
+	if ks.Artifacts == nil {
+		ks.Artifacts = []string{}
+	}
+	if ks.NetworkingTech == nil {
+		ks.NetworkingTech = []string{}
+	}
+
+	return json.Marshal((Alias)(ks))
+}
+
 var (
 	verbSet  = map[string]bool{"Create": true, "Update": true, "Patch": true, "Delete": true, "Get": true, "List": true, "Watch": true}
 	goldenRe = regexp.MustCompile(`(?i)testdata/[^"']+`)
