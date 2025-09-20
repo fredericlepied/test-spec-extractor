@@ -40,6 +40,29 @@ PURPOSE_COMPATIBILITY = {
         "CONFIGURATION",
         "PERFORMANCE",
     ],  # Removed network and pod purposes
+    # Specialized testing purposes - only match with themselves or very specific others
+    "SRIOV_TESTING": [
+        "SRIOV_TESTING",
+        "NETWORK_POLICY",
+    ],  # SR-IOV only matches SR-IOV or network policy
+    "PTP_TESTING": [
+        "PTP_TESTING",
+        "NETWORK_CONNECTIVITY",
+    ],  # PTP only matches PTP or network connectivity
+    "DUAL_STACK_TESTING": [
+        "DUAL_STACK_TESTING",
+        "NETWORK_CONNECTIVITY",
+    ],  # Dual stack only matches dual stack or network
+    "IPV4_ONLY_TESTING": [
+        "IPV4_ONLY_TESTING",
+        "DUAL_STACK_TESTING",
+        "NETWORK_CONNECTIVITY",
+    ],
+    "IPV6_ONLY_TESTING": [
+        "IPV6_ONLY_TESTING",
+        "DUAL_STACK_TESTING",
+        "NETWORK_CONNECTIVITY",
+    ],
     "UNKNOWN": [
         "POD_MANAGEMENT",
         "POD_HEALTH",
@@ -52,6 +75,27 @@ PURPOSE_COMPATIBILITY = {
         "PERFORMANCE",
         "RESOURCE_VALIDATION",
     ],
+}
+
+# Networking technology compatibility matrix
+NETWORKING_TECH_COMPATIBILITY = {
+    "SR-IOV": ["SR-IOV", "CNI"],  # SR-IOV can match with CNI (both are networking)
+    "PTP": ["PTP", "CNI"],  # PTP can match with CNI (both are networking)
+    "DPDK": ["DPDK", "CNI"],  # DPDK can match with CNI (both are networking)
+    "MetalLB": ["MetalLB", "CNI"],  # MetalLB can match with CNI (both are networking)
+    "GPU": ["GPU"],  # GPU only matches GPU (hardware acceleration)
+    "RDMA": ["RDMA", "CNI"],  # RDMA can match with CNI (both are networking)
+    "Bonding": ["Bonding", "CNI"],  # Bonding can match with CNI (both are networking)
+    "CNI": [
+        "SR-IOV",
+        "PTP",
+        "DPDK",
+        "MetalLB",
+        "RDMA",
+        "Bonding",
+        "CNI",
+    ],  # CNI is compatible with all networking tech
+    "Power Management": ["Power Management"],  # Power management only matches itself
 }
 
 
@@ -67,6 +111,25 @@ def is_purpose_compatible(purpose_a: str, purpose_b: str) -> bool:
     # Check compatibility matrix
     compatible_purposes = PURPOSE_COMPATIBILITY.get(purpose_a, [])
     return purpose_b in compatible_purposes
+
+
+def is_networking_tech_compatible(tech_a: List[str], tech_b: List[str]) -> bool:
+    """Check if two sets of networking technologies are compatible for matching."""
+    if not tech_a or not tech_b:
+        return True  # Allow matches if no networking tech specified
+
+    # If either test has no networking tech, allow the match
+    if not tech_a or not tech_b:
+        return True
+
+    # Check if any technology from test A is compatible with any technology from test B
+    for tech1 in tech_a:
+        for tech2 in tech_b:
+            compatible_techs = NETWORKING_TECH_COMPATIBILITY.get(tech1, [])
+            if tech2 in compatible_techs:
+                return True
+
+    return False
 
 
 def calculate_functional_similarity(
@@ -188,7 +251,7 @@ def filter_by_purpose_compatibility(
     specs_a: List[Dict[str, Any]],
     specs_b: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Filter matches based on purpose compatibility and meaningful operations."""
+    """Filter matches based on purpose compatibility, networking tech compatibility, and meaningful operations."""
     filtered = []
     for match in matches:
         idx_a = match["idx_a"]
@@ -196,9 +259,15 @@ def filter_by_purpose_compatibility(
 
         purpose_a = specs_a[idx_a].get("purpose", "")
         purpose_b = specs_b[idx_b].get("purpose", "")
+        tech_a = specs_a[idx_a].get("networking_tech", [])
+        tech_b = specs_b[idx_b].get("networking_tech", [])
 
         # Check purpose compatibility
         if not is_purpose_compatible(purpose_a, purpose_b):
+            continue
+
+        # Check networking technology compatibility
+        if not is_networking_tech_compatible(tech_a, tech_b):
             continue
 
         # For high-similarity matches, also check for meaningful operations
@@ -499,6 +568,27 @@ def shared_signals(a: Dict[str, Any], b: Dict[str, Any]) -> str:
     if verb_group_matches:
         signals.extend([f"verb_group:{match}" for match in verb_group_matches])
 
+    # 5. Purpose compatibility
+    purpose_a = a.get("purpose", "")
+    purpose_b = b.get("purpose", "")
+    if purpose_a and purpose_b:
+        if purpose_a == purpose_b:
+            signals.append(f"purpose:{purpose_a}")
+        elif is_purpose_compatible(purpose_a, purpose_b):
+            signals.append(f"purpose_compatible:{purpose_a}~{purpose_b}")
+
+    # 6. Networking technology compatibility
+    tech_a = a.get("networking_tech", [])
+    tech_b = b.get("networking_tech", [])
+    if tech_a and tech_b:
+        common_techs = set(tech_a) & set(tech_b)
+        if common_techs:
+            signals.append(f"networking_tech:{','.join(sorted(common_techs))}")
+        elif is_networking_tech_compatible(tech_a, tech_b):
+            signals.append(
+                f"networking_tech_compatible:{','.join(sorted(tech_a))}~{','.join(sorted(tech_b))}"
+            )
+
     return ";".join(signals)
 
 
@@ -527,6 +617,22 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
                     purpose_boost = 0.10  # Compatible purposes get moderate boost
                 else:
                     purpose_boost = -0.30  # Incompatible purposes get penalty
+
+            # Networking technology compatibility scoring
+            tech_a = specs_a[i].get("networking_tech", [])
+            tech_b = specs_b[j].get("networking_tech", [])
+            tech_boost = 0.0
+
+            if tech_a and tech_b:
+                common_techs = set(tech_a) & set(tech_b)
+                if common_techs:
+                    tech_boost = 0.15 * len(
+                        common_techs
+                    )  # Boost for common technologies
+                elif is_networking_tech_compatible(tech_a, tech_b):
+                    tech_boost = 0.08  # Moderate boost for compatible technologies
+                else:
+                    tech_boost = -0.20  # Penalty for incompatible technologies
 
             # Functional similarity scoring
             functional_score = calculate_functional_similarity(specs_a[i], specs_b[j])
@@ -569,11 +675,17 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
                     )  # Lower boost for resource matches
 
                 boosted_score = min(
-                    1.0, float(sc) + signal_boost + purpose_boost + functional_boost
+                    1.0,
+                    float(sc)
+                    + signal_boost
+                    + purpose_boost
+                    + tech_boost
+                    + functional_boost,
                 )
             else:
                 boosted_score = min(
-                    1.0, max(0.0, float(sc) + purpose_boost + functional_boost)
+                    1.0,
+                    max(0.0, float(sc) + purpose_boost + tech_boost + functional_boost),
                 )
 
             pairs.append(
@@ -617,9 +729,11 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
         if any(s.startswith("verb_group:") for s in p["shared_signals"].split(";"))
     ]
 
-    # Count purpose compatibility and functional similarity
+    # Count purpose compatibility, networking tech compatibility, and functional similarity
     purpose_compatible_matches = []
     purpose_same_matches = []
+    tech_compatible_matches = []
+    tech_same_matches = []
     functional_matches = []
     for p in high_sim_matches:
         idx_a = p["idx_a"]
@@ -637,6 +751,16 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
             elif is_purpose_compatible(purpose_a, purpose_b):
                 purpose_compatible_matches.append(p)
 
+        # Check networking technology compatibility
+        tech_a = specs_a[idx_a].get("networking_tech", [])
+        tech_b = specs_b[idx_b].get("networking_tech", [])
+        if tech_a and tech_b:
+            common_techs = set(tech_a) & set(tech_b)
+            if common_techs:
+                tech_same_matches.append(p)
+            elif is_networking_tech_compatible(tech_a, tech_b):
+                tech_compatible_matches.append(p)
+
         # Check functional similarity
         functional_score = calculate_functional_similarity(
             specs_a[idx_a], specs_b[idx_b]
@@ -652,6 +776,8 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
     print(f"  - Any shared signals: {len(shared_ops_matches)}")
     print(f"  - Same purpose: {len(purpose_same_matches)}")
     print(f"  - Compatible purpose: {len(purpose_compatible_matches)}")
+    print(f"  - Same networking tech: {len(tech_same_matches)}")
+    print(f"  - Compatible networking tech: {len(tech_compatible_matches)}")
     print(f"  - Functional similarity: {len(functional_matches)}")
 
     if len(high_sim_matches) > 0:
@@ -661,9 +787,15 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
             / len(high_sim_matches)
             * 100
         )
+        tech_rate = (
+            (len(tech_same_matches) + len(tech_compatible_matches))
+            / len(high_sim_matches)
+            * 100
+        )
         functional_rate = len(functional_matches) / len(high_sim_matches) * 100
         print(f"Operation validation rate: {validation_rate:.1f}%")
         print(f"Purpose compatibility rate: {purpose_rate:.1f}%")
+        print(f"Networking tech compatibility rate: {tech_rate:.1f}%")
         print(f"Functional similarity rate: {functional_rate:.1f}%")
 
         if validation_rate < 50:
