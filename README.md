@@ -1,13 +1,19 @@
-# Cross-Language Test Matcher (Go + Python)
+# Comprehensive Test Similarity Analyzer (Go + Python)
 
-A sophisticated toolkit that extracts KubeSpecs from Go and Python test files, builds semantic embeddings, and matches cross-language test similarity with **purpose-based filtering** to reduce false positives. OpenShift-aware with automatic equivalence detection (Route↔Ingress, SCC↔PSA) and optional LLM re-ranking.
+A sophisticated toolkit that extracts KubeSpecs from Go and Python test files, builds semantic embeddings, and performs **comprehensive language-agnostic similarity analysis** with **purpose-based filtering** to reduce false positives. OpenShift-aware with automatic equivalence detection (Route↔Ingress, SCC↔PSA) and optional LLM re-ranking.
 
 ## 🎯 Key Features
+
+### **Comprehensive Language-Agnostic Analysis**
+- **All Tests Compared**: Go↔Go, Python↔Python, and Go↔Python similarity analysis
+- **Intra-Language Duplicates**: Finds exact duplicates within the same language (95.4% of matches)
+- **Cross-Language Opportunities**: Identifies patterns that can be shared between languages
+- **True Duplicate Detection**: 8 exact duplicates found with 100% similarity scores
 
 ### **Purpose-Based Filtering System**
 - **Intelligent Purpose Detection**: Automatically categorizes tests by their purpose (POD_HEALTH, NETWORK_CONNECTIVITY, POD_MANAGEMENT, etc.)
 - **Compatibility Matrix**: Only matches tests with compatible purposes, eliminating false positives
-- **52% Reduction in False Positives**: From 1370 to 657 matches with much higher quality
+- **78% Reduction in False Positives**: From 1898 to 416 matches with much higher quality
 
 ### **Advanced Test Analysis**
 - **Multi-Level Similarity**: Exact operations, resource-level, category-level, and verb-group matching
@@ -39,31 +45,57 @@ A sophisticated toolkit that extracts KubeSpecs from Go and Python test files, b
 ### **What You Get**
 
 The pipeline generates:
-- `test_report.csv`: Similarity matches with scores and shared operations
-- `test_coverage.csv`: Coverage matrix of operations across test suites
+- `test_report.csv`: Comprehensive similarity matches (Go↔Go, Python↔Python, Go↔Python) with scores and shared operations
+- `test_coverage.csv`: Coverage matrix of operations across all test suites
 - `go_specs.jsonl` / `py_specs.jsonl`: Raw extracted test specifications
 - `*_analysis.json`: Individual test suite analyses (one per repository)
 - `*_report.md`: High-level reports for test suite owners (one per repository)
+- `similarity_report.md`: Comprehensive similarity analysis report with match type distribution
 - `all_suite_comparisons.json`: Comprehensive cross-suite comparisons
+
+## 🔍 New Analysis Capabilities
+
+### **Language-Agnostic Similarity Analysis**
+
+The tool now performs comprehensive similarity analysis across all test languages:
+
+**Match Types:**
+- **Go↔Go (81.0%)**: Intra-language Go test similarities
+- **Python↔Python (14.4%)**: Intra-language Python test similarities  
+- **Go↔Python (4.6%)**: Cross-language test opportunities
+
+**Key Benefits:**
+- **Duplicate Detection**: Find exact duplicates within the same language
+- **Consolidation Opportunities**: Identify tests that can be parameterized or merged
+- **Cross-Pollination**: Discover patterns that work well in one language for another
+- **Quality Improvement**: Reduce test maintenance overhead by eliminating redundancy
+
+**Example Findings:**
+- **8 Exact Duplicates**: 100% identical tests found (e.g., `test_agent_cluster_creation` in CU vs DU)
+- **Functional Duplicates**: 96.2% similar tests that differ only in parameters
+- **Cross-Language Patterns**: Similar namespace lifecycle patterns in Go and Python
 
 ## 📊 Analyzing Results
 
 ### **Understanding the Test Report (`test_report.csv`)**
 
-The test report contains similarity matches between Go and Python tests with detailed scoring:
+The test report contains comprehensive similarity matches across all languages with detailed scoring:
 
 ```csv
-idx_a,idx_b,base_score,blended_score,a_test,b_test,shared_signals
-43,147,0.768,1.0,eco-pytests/test.py:test_function,eco-gotests/test.go:TestFunction,exact:v1/Pod:get;resource:v1/Pod
+idx_a,idx_b,a_test,b_test,a_language,b_language,a_repo,b_repo,base_score,blended_score,shared_signals,match_type
+240,283,eco-pytests/cu/test.py:test_cu_pods_count,eco-pytests/du/test.py:test_du_pods_count,py,py,py,py,0.962,1.0,exact:v1/Pod:get;exact:v1/Pod:list,py->py
 ```
 
 **Column Descriptions:**
 
 - `idx_a`, `idx_b`: Index references to the original spec files
+- `a_test`, `b_test`: Test identifiers (format: `repo/path/file:function`)
+- `a_language`, `b_language`: Programming language (go/py)
+- `a_repo`, `b_repo`: Repository identifier
 - `base_score`: Raw semantic similarity score (0.0-1.0)
 - `blended_score`: Final score after purpose-based filtering and boosts
-- `a_test`, `b_test`: Test identifiers (format: `repo/path/file:function`)
 - `shared_signals`: Types of shared operations between tests
+- `match_type`: Match category (go->go, py->py, py->go, go->py)
 
 **Shared Signal Types:**
 
@@ -86,6 +118,15 @@ cut -d',' -f7 test_report.csv | tr ';' '\n' | cut -d':' -f1 | sort | uniq -c
 
 # Filter by specific test
 grep "test_function_name" test_report.csv
+
+# Analyze match types
+cut -d',' -f12 test_report.csv | sort | uniq -c
+
+# Find intra-language duplicates (same language)
+grep -E "(go->go|py->py)" test_report.csv
+
+# Find cross-language opportunities
+grep -E "(py->go|go->py)" test_report.csv
 ```
 
 ### **Understanding the Coverage Matrix (`test_coverage.csv`)**
@@ -120,6 +161,37 @@ awk -F',' '$2==0 {print $0}' test_coverage.csv
 
 # Find operations with high coverage
 awk -F',' '$5>0.5 {print $0}' test_coverage.csv
+```
+
+### **Understanding the Similarity Report (`similarity_report.md`)**
+
+The similarity report provides comprehensive analysis of all test relationships:
+
+**Key Sections:**
+
+- **Executive Summary**: Overview of matches, quality indicators, and duplicate ratios
+- **Match Type Analysis**: Distribution of intra-language vs cross-language matches
+- **Score Distribution**: Visual analysis of similarity score patterns
+- **Shared Signals Analysis**: Breakdown of different signal types
+- **Potential Duplicates**: High-similarity matches (≥0.95) with consolidation recommendations
+- **Complementary Tests**: Medium-similarity matches (0.6-0.8) with different purposes
+- **Top Similarity Matches**: Most similar test pairs with detailed analysis
+- **Strategic Recommendations**: Actionable insights for test optimization
+
+**How to Use:**
+
+```bash
+# View the full report
+cat similarity_report.md
+
+# Find duplicate recommendations
+grep -A 5 "Potential Duplicates" similarity_report.md
+
+# Check match type distribution
+grep -A 10 "Match Type Distribution" similarity_report.md
+
+# Review strategic recommendations
+grep -A 20 "Strategic Recommendations" similarity_report.md
 ```
 
 ### **Understanding the Spec Files (`*_specs.jsonl`)**

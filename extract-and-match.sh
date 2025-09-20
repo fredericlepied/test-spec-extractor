@@ -341,6 +341,24 @@ if [[ -f "$OUTPUT_DIR/go_specs.jsonl" && -f "$OUTPUT_DIR/py_specs.jsonl" ]]; the
                 fi
             fi
         done
+        
+        # Generate similarity matches report
+        print_status "Generating similarity matches report..."
+        if [[ -f "$OUTPUT_DIR/test_report.csv" && -f "$OUTPUT_DIR/test_coverage.csv" && -f "$OUTPUT_DIR/go_specs.jsonl" && -f "$OUTPUT_DIR/py_specs.jsonl" ]]; then
+            similarity_report="$OUTPUT_DIR/similarity_report.md"
+            if python match/generate_similarity_report.py \
+                --test-report "$OUTPUT_DIR/test_report.csv" \
+                --test-coverage "$OUTPUT_DIR/test_coverage.csv" \
+                --go-specs "$OUTPUT_DIR/go_specs.jsonl" \
+                --py-specs "$OUTPUT_DIR/py_specs.jsonl" \
+                -o "$similarity_report"; then
+                echo "  - $similarity_report (similarity analysis)"
+            else
+                print_warning "Failed to generate similarity report"
+            fi
+        else
+            print_warning "Missing files for similarity report generation"
+        fi
     else
         print_warning "Test suite analysis failed, but continuing..."
     fi
@@ -360,6 +378,9 @@ if [[ "$CLEANUP" == "true" ]]; then
     fi
     rm -f "$OUTPUT_DIR"/go_specs_*.jsonl
     rm -f "$OUTPUT_DIR"/py_specs_*.jsonl
+    # Remove old combined suite files (we only generate individual suite reports)
+    rm -f "$OUTPUT_DIR"/go_suite_analysis.json "$OUTPUT_DIR"/py_suite_analysis.json
+    rm -f "$OUTPUT_DIR"/go_suite_report.md "$OUTPUT_DIR"/py_suite_report.md
     print_success "Cleanup completed (virtual environment preserved)"
 else
     print_warning "Skipping cleanup (intermediate files preserved)"
@@ -375,6 +396,7 @@ echo "  - $OUTPUT_DIR/test_report.csv (Similarity matches)"
 echo "  - $OUTPUT_DIR/test_coverage.csv (Coverage matrix)"
 echo "  - $OUTPUT_DIR/*_analysis.json (Individual test suite analyses)"
 echo "  - $OUTPUT_DIR/*_report.md (High-level reports for test suite owners)"
+echo "  - $OUTPUT_DIR/similarity_report.md (Similarity matches analysis)"
 echo "  - $OUTPUT_DIR/all_suite_comparisons.json (All suite comparisons)"
 
 if [[ "$CLEANUP" == "false" ]]; then

@@ -855,7 +855,7 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
                 return {"target": "test_condition", "condition": condition}
 
     # Handle simple boolean assertions
-    elif isinstance(assert_node.test, ast.NameConstant):
+    elif isinstance(assert_node.test, ast.Constant):
         condition = str(assert_node.test.value)
         return {"target": "test_condition", "condition": condition}
 

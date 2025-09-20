@@ -986,6 +986,50 @@ def write_report(pairs_ab, pairs_ba, go_specs, py_specs, out_csv):
     print(f"Wrote {out_csv} ({len(df)} rows)")
 
 
+def write_comprehensive_report(pairs, all_specs, outfile):
+    """Write comprehensive similarity report to CSV (language-agnostic)."""
+    import pandas as pd
+
+    rows = []
+    for p in pairs:
+        spec_a = all_specs[p["idx_a"]]
+        spec_b = all_specs[p["idx_b"]]
+
+        rows.append(
+            {
+                "idx_a": p["idx_a"],
+                "idx_b": p["idx_b"],
+                "a_test": spec_a["test_id"],
+                "b_test": spec_b["test_id"],
+                "a_language": spec_a["_language"],
+                "b_language": spec_b["_language"],
+                "a_repo": spec_a["_repo"],
+                "b_repo": spec_b["_repo"],
+                "base_score": p["base_score"],
+                "blended_score": p["blended_score"],
+                "shared_signals": p["shared_signals"],
+                "match_type": f"{spec_a['_language']}->{spec_b['_language']}",
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    score_col = "blended_score" if "blended_score" in df.columns else "base_score"
+    df.sort_values(score_col, ascending=False, inplace=True)
+
+    # Validate high similarity matches
+    print("\n=== VALIDATION RESULTS ===")
+    validate_high_similarity_matches(pairs, all_specs, all_specs)
+
+    df.to_csv(outfile, index=False)
+    print(f"Wrote {outfile} ({len(df)} rows)")
+
+    # Print summary by match type
+    match_types = df["match_type"].value_counts()
+    print("Match type distribution:")
+    for match_type, count in match_types.items():
+        print(f"  {match_type}: {count} matches")
+
+
 def coverage_matrix(specs, repo_label):
     from collections import Counter
 
@@ -1017,12 +1061,16 @@ def main():
     )
     args = ap.parse_args()
 
+    # Load and combine all specs regardless of language
     go_specs = load_specs(args.go)
     for s in go_specs:
         s["_repo"] = "go"
+        s["_language"] = "go"
+
     py_specs = load_specs(args.py)
     for s in py_specs:
         s["_repo"] = "py"
+        s["_language"] = "py"
 
     # Filter out empty tests
     print("Filtering Go specs...")
@@ -1030,38 +1078,55 @@ def main():
     print("Filtering Python specs...")
     py_specs = filter_empty_tests(py_specs)
 
-    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-    go_embs = build_embeddings(go_specs, model)
-    py_embs = build_embeddings(py_specs, model)
+    # Combine all specs for comprehensive analysis
+    all_specs = go_specs + py_specs
+    print(
+        f"Total specs for analysis: {len(all_specs)} (Go: {len(go_specs)}, Python: {len(py_specs)})"
+    )
 
-    pairs_ab = cross_match(go_specs, go_embs, py_specs, py_embs, topk=5)
-    pairs_ba = cross_match(py_specs, py_embs, go_specs, go_embs, topk=5)
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    all_embs = build_embeddings(all_specs, model)
+
+    # Find similar tests across all specs (including within same language)
+    print("Finding similar tests across all languages...")
+    pairs = cross_match(all_specs, all_embs, all_specs, all_embs, topk=10)
+
+    # Remove self-matches and duplicates
+    filtered_pairs = []
+    seen_pairs = set()
+    for pair in pairs:
+        idx_a, idx_b = pair["idx_a"], pair["idx_b"]
+        # Skip self-matches
+        if idx_a == idx_b:
+            continue
+        # Skip duplicate pairs (A-B and B-A)
+        pair_key = tuple(sorted([idx_a, idx_b]))
+        if pair_key not in seen_pairs:
+            seen_pairs.add(pair_key)
+            filtered_pairs.append(pair)
+
+    print(f"Found {len(filtered_pairs)} unique similar test pairs")
 
     # Apply purpose-based filtering to reduce false positives
-    print(
-        f"Before purpose filtering: {len(pairs_ab)} A->B matches, {len(pairs_ba)} B->A matches"
+    print(f"Before purpose filtering: {len(filtered_pairs)} matches")
+    filtered_pairs = filter_by_purpose_compatibility(
+        filtered_pairs, all_specs, all_specs
     )
-    pairs_ab = filter_by_purpose_compatibility(pairs_ab, go_specs, py_specs)
-    pairs_ba = filter_by_purpose_compatibility(pairs_ba, py_specs, go_specs)
-    print(
-        f"After purpose filtering: {len(pairs_ab)} A->B matches, {len(pairs_ba)} B->A matches"
-    )
+    print(f"After purpose filtering: {len(filtered_pairs)} matches")
 
     if args.llm:
         from llm_rerank import rerank_batch
 
-        print("Re-ranking A->B with LLM...")
-        pairs_ab = rerank_batch(pairs_ab, go_specs, py_specs)
-        print("Re-ranking B->A with LLM...")
-        pairs_ba = rerank_batch(pairs_ba, py_specs, go_specs)
+        print("Re-ranking with LLM...")
+        filtered_pairs = rerank_batch(filtered_pairs, all_specs, all_specs)
 
-    write_report(pairs_ab, pairs_ba, go_specs, py_specs, args.out)
+    # Write comprehensive report
+    write_comprehensive_report(filtered_pairs, all_specs, args.out)
 
-    df_go = coverage_matrix(go_specs, "go")
-    df_py = coverage_matrix(py_specs, "py")
-    cov = pd.concat([df_go, df_py], ignore_index=True)
-    cov.to_csv(args.cov, index=False)
-    print(f"Wrote {args.cov} ({len(cov)} rows)")
+    # Generate coverage matrix for all specs
+    df_all = coverage_matrix(all_specs, "all")
+    df_all.to_csv(args.cov, index=False)
+    print(f"Wrote {args.cov} ({len(df_all)} rows)")
 
 
 if __name__ == "__main__":

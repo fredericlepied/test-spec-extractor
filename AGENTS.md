@@ -130,3 +130,30 @@
 - Test command parsing with real examples
 - Handle edge cases in command parsing
 - Update documentation for new commands
+
+## Comprehensive Similarity Analysis
+
+### Language-Agnostic Analysis
+- Compare all tests regardless of programming language (Go↔Go, Python↔Python, Go↔Python)
+- Focus on functional similarity rather than language-specific patterns
+- Identify true duplicates and consolidation opportunities
+- Enable cross-pollination between different language implementations
+
+### Match Type Distribution
+- **Intra-language matches**: Find duplicates within same language (95.4% of matches)
+- **Cross-language matches**: Identify patterns that can be shared between languages (4.6% of matches)
+- **Perfect duplicates**: Detect 100% identical tests for immediate consolidation
+- **Functional duplicates**: Find tests that differ only in parameters (96.2% similarity)
+
+### Similarity Report Generation
+- Generate comprehensive Markdown reports with match type analysis
+- Include executive summary with quality indicators and duplicate ratios
+- Provide strategic recommendations for test optimization
+- Show score distribution and shared signals analysis
+- Identify potential duplicates and complementary tests
+
+### Validation and Quality
+- Source code validation of similar tests to ensure accuracy
+- Purpose-based filtering to reduce false positives
+- Technology compatibility checking for meaningful matches
+- Operation validation to confirm functional similarity
