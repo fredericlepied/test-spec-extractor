@@ -19,7 +19,7 @@ A sophisticated toolkit that extracts KubeSpecs from Go and Python test files, b
 - **Go Tests**: Supports Ginkgo/Gomega, eco-goinfra, standard Go tests
 - **Python Tests**: Supports pytest, openshift library, subprocess calls
 - **Cross-File Detection**: Detects operations in helper functions across files
-- **Rich Metadata**: Extracts actions, expectations, preconditions, artifacts
+- **Rich Metadata**: Extracts actions, expectations, dependencies, environment, tech
 
 ## 🚀 Quick Start
 
@@ -147,6 +147,7 @@ Each line in the spec files contains a complete test specification in JSON forma
 - `test_type`: Test classification (unit, integration, e2e, performance, conformance)
 - `dependencies`: Required components (network, storage, operator, etc.)
 - `environment`: Target environment (single_node, multi_node, bare_metal, cloud, edge)
+- `tech`: Technologies detected (SR-IOV, GPU, Storage, Security, etc.)
 - `actions`: Kubernetes operations performed (GVK:verb pairs)
 - `expectations`: Test assertions and validations
 - `openshift_specific`: OpenShift-specific resources used
@@ -619,14 +620,16 @@ idx_a,idx_b,base_score,blended_score,a_test,b_test,shared_signals
 ```json
 {
   "test_id": "repo/test.go:TestFunction",
-  "level": "integration",
+  "test_type": "integration",
+  "dependencies": ["psa:pod-security.kubernetes.io/enforce=restricted"],
+  "environment": ["multi_node"],
   "purpose": "POD_HEALTH",
   "actions": [{"gvk": "v1/Pod", "verb": "get"}],
   "expectations": [{"target": "resource_status", "condition": "pod.status.phase == 'Running'"}],
-  "preconditions": ["psa:pod-security.kubernetes.io/enforce=restricted"],
   "openshift_specific": ["route.openshift.io/v1/Route"],
   "concurrency": [],
-  "artifacts": ["testdata/pod.yaml"]
+  "artifacts": ["testdata/pod.yaml"],
+  "tech": ["SR-IOV", "GPU"]
 }
 ```
 

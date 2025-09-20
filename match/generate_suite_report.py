@@ -140,7 +140,7 @@ def generate_coverage_analysis(analysis):
 
     # Networking technology analysis
     purposes = analysis.get("test_distribution", {}).get("by_purpose", {})
-    networking_tech = {}
+    tech = {}
     for purpose, count in purposes.items():
         if purpose in [
             "SRIOV_TESTING",
@@ -149,20 +149,20 @@ def generate_coverage_analysis(analysis):
             "IPV6_ONLY_TESTING",
             "PTP_TESTING",
         ]:
-            networking_tech[purpose] = count
+            tech[purpose] = count
 
-    if networking_tech:
+    if tech:
         coverage.append("**Networking Technologies:**")
-        for tech, count in networking_tech.items():
-            tech_name = tech.replace("_TESTING", "").replace("_", " ").title()
+        for tech_name, count in tech.items():
+            tech_display = tech_name.replace("_TESTING", "").replace("_", " ").title()
             # Special formatting for IP stack categories
-            if tech == "IPV4_ONLY_TESTING":
-                tech_name = "IPv4 Only"
-            elif tech == "IPV6_ONLY_TESTING":
-                tech_name = "IPv6 Only"
-            elif tech == "DUAL_STACK_TESTING":
-                tech_name = "Dual Stack (IPv4+IPv6)"
-            coverage.append(f"- {tech_name}: {format_number(count)} tests")
+            if tech_name == "IPV4_ONLY_TESTING":
+                tech_display = "IPv4 Only"
+            elif tech_name == "IPV6_ONLY_TESTING":
+                tech_display = "IPv6 Only"
+            elif tech_name == "DUAL_STACK_TESTING":
+                tech_display = "Dual Stack (IPv4+IPv6)"
+            coverage.append(f"- {tech_display}: {format_number(count)} tests")
         coverage.append("")
 
     return "\n".join(coverage)

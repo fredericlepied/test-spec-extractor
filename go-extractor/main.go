@@ -36,7 +36,7 @@ type KubeSpec struct {
 	Concurrency       []string            `json:"concurrency"`
 	Artifacts         []string            `json:"artifacts"`
 	Purpose           string              `json:"purpose"`
-	NetworkingTech    []string            `json:"networking_tech"` // SR-IOV, PTP, DPDK, GPU, etc.
+	Tech              []string            `json:"tech"` // SR-IOV, PTP, DPDK, GPU, Virtualization, Storage, etc.
 }
 
 // MarshalJSON ensures that nil slices are marshaled as empty arrays instead of null
@@ -66,8 +66,8 @@ func (ks KubeSpec) MarshalJSON() ([]byte, error) {
 	if ks.Artifacts == nil {
 		ks.Artifacts = []string{}
 	}
-	if ks.NetworkingTech == nil {
-		ks.NetworkingTech = []string{}
+	if ks.Tech == nil {
+		ks.Tech = []string{}
 	}
 
 	return json.Marshal((Alias)(ks))
@@ -1267,7 +1267,7 @@ func main() {
 				OpenShiftSpecific: []string{},
 				Concurrency:       []string{},
 				Artifacts:         []string{},
-				NetworkingTech:    []string{},
+				Tech:              []string{},
 			}
 			// Replace full path with basename in test_id
 			basename := filepath.Base(*root)
@@ -1425,7 +1425,7 @@ func main() {
 				// Detect purpose based on test content
 				comments := []string{} // TODO: Extract comments from AST
 				spec.Purpose = detectPurpose(spec.TestID, comments, spec.Actions, spec.Expectations)
-				spec.NetworkingTech = detectNetworkingTech(spec.TestID, path, comments)
+				spec.Tech = detectNetworkingTech(spec.TestID, path, comments)
 
 				b, _ := json.Marshal(spec)
 				fmt.Fprintln(out, string(b))
@@ -1497,7 +1497,7 @@ func main() {
 				OpenShiftSpecific: []string{},
 				Concurrency:       []string{},
 				Artifacts:         []string{},
-				NetworkingTech:    []string{},
+				Tech:              []string{},
 			}
 			// Replace full path with basename in test_id
 			basename := filepath.Base(*root)
@@ -1651,7 +1651,7 @@ func main() {
 			spec.TestType = detectTestType(spec.TestID, path, comments)
 			spec.Dependencies = detectDependencies(spec.TestID, path, comments, spec.Actions)
 			spec.Environment = detectEnvironment(spec.TestID, path, comments)
-			spec.NetworkingTech = detectNetworkingTech(spec.TestID, path, comments)
+			spec.Tech = detectNetworkingTech(spec.TestID, path, comments)
 
 			bridges := map[string]bool{}
 			for _, a := range spec.Actions {

@@ -328,8 +328,8 @@ def filter_by_purpose_compatibility(
 
         purpose_a = specs_a[idx_a].get("purpose", "")
         purpose_b = specs_b[idx_b].get("purpose", "")
-        tech_a = specs_a[idx_a].get("networking_tech", [])
-        tech_b = specs_b[idx_b].get("networking_tech", [])
+        tech_a = specs_a[idx_a].get("tech", [])
+        tech_b = specs_b[idx_b].get("tech", [])
         resources_a = get_resources_from_spec(specs_a[idx_a])
         resources_b = get_resources_from_spec(specs_b[idx_b])
 
@@ -449,7 +449,7 @@ def is_empty_test(spec: Dict[str, Any]) -> bool:
     # Handle None values by converting to empty lists
     actions = spec.get("actions") or []
     expectations = spec.get("expectations") or []
-    preconditions = spec.get("preconditions") or []
+    dependencies = spec.get("dependencies") or []
     openshift_specific = spec.get("openshift_specific") or []
     concurrency = spec.get("concurrency") or []
     artifacts = spec.get("artifacts") or []
@@ -460,7 +460,7 @@ def is_empty_test(spec: Dict[str, Any]) -> bool:
     has_actions = len(actions) > 0
     has_expectations = len(expectations) > 0
     has_other_content = (
-        len(preconditions) > 0
+        len(dependencies) > 0
         or len(openshift_specific) > 0
         or len(concurrency) > 0
         or len(artifacts) > 0
@@ -494,13 +494,13 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
     # Don't include test_id in the content - it's used as document ID
     parts = []
 
-    # Include level field to differentiate empty tests
-    level = spec.get("level", "unknown")
-    if level:
-        parts.append(f"level:{level}")
+    # Include test_type field to differentiate empty tests
+    test_type = spec.get("test_type", "unknown")
+    if test_type:
+        parts.append(f"test_type:{test_type}")
 
     # Handle None values by converting to empty lists
-    preconditions = spec.get("preconditions") or []
+    dependencies = spec.get("dependencies") or []
     actions = spec.get("actions") or []
     expectations = spec.get("expectations") or []
     externals = spec.get("externals") or []
@@ -508,7 +508,7 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
     concurrency = spec.get("concurrency") or []
     artifacts = spec.get("artifacts") or []
 
-    parts += preconditions
+    parts += dependencies
     for a in actions:
         gvk = a.get("gvk", "")
         kind_hint = (a.get("fields") or {}).get("kind_hint", "")
@@ -675,12 +675,12 @@ def shared_signals(a: Dict[str, Any], b: Dict[str, Any]) -> str:
             )
 
     # 7. Networking technology compatibility
-    tech_a = a.get("networking_tech", [])
-    tech_b = b.get("networking_tech", [])
+    tech_a = a.get("tech", [])
+    tech_b = b.get("tech", [])
     if tech_a and tech_b:
         common_techs = set(tech_a) & set(tech_b)
         if common_techs:
-            signals.append(f"networking_tech:{','.join(sorted(common_techs))}")
+            signals.append(f"tech:{','.join(sorted(common_techs))}")
         elif is_tech_compatible(tech_a, tech_b):
             signals.append(
                 f"tech_compatible:{','.join(sorted(tech_a))}~{','.join(sorted(tech_b))}"
@@ -716,8 +716,8 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
                     purpose_boost = -0.30  # Incompatible purposes get penalty
 
             # Networking technology compatibility scoring
-            tech_a = specs_a[i].get("networking_tech", [])
-            tech_b = specs_b[j].get("networking_tech", [])
+            tech_a = specs_a[i].get("tech", [])
+            tech_b = specs_b[j].get("tech", [])
             tech_boost = 0.0
 
             if tech_a and tech_b:
@@ -849,8 +849,8 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
                 purpose_compatible_matches.append(p)
 
         # Check networking technology compatibility
-        tech_a = specs_a[idx_a].get("networking_tech", [])
-        tech_b = specs_b[idx_b].get("networking_tech", [])
+        tech_a = specs_a[idx_a].get("tech", [])
+        tech_b = specs_b[idx_b].get("tech", [])
         if tech_a and tech_b:
             common_techs = set(tech_a) & set(tech_b)
             if common_techs:

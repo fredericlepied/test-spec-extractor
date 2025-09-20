@@ -300,9 +300,9 @@ def detect_environment(test_name: str, file_path: str, docstring: str) -> list:
     return environment
 
 
-def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> list:
+def detect_tech(test_name: str, file_path: str, docstring: str) -> list:
     """Detect networking technologies from test name, file path, and docstring."""
-    networking_tech = []
+    tech = []
     content = (test_name + " " + file_path + " " + (docstring or "")).lower()
 
     # Check for SR-IOV patterns
@@ -317,7 +317,7 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in sriov_patterns:
         if re.search(pattern, content):
-            networking_tech.append("SR-IOV")
+            tech.append("SR-IOV")
             break
 
     # Check for PTP patterns
@@ -331,14 +331,14 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in ptp_patterns:
         if re.search(pattern, content):
-            networking_tech.append("PTP")
+            tech.append("PTP")
             break
 
     # Check for DPDK patterns
     dpdk_patterns = ["dpdk", "data.*plane.*development.*kit", "userspace.*networking"]
     for pattern in dpdk_patterns:
         if re.search(pattern, content):
-            networking_tech.append("DPDK")
+            tech.append("DPDK")
             break
 
     # Check for MetalLB patterns
@@ -352,7 +352,7 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in metallb_patterns:
         if re.search(pattern, content):
-            networking_tech.append("MetalLB")
+            tech.append("MetalLB")
             break
 
     # Check for GPU patterns
@@ -368,7 +368,7 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in gpu_patterns:
         if re.search(pattern, content):
-            networking_tech.append("GPU")
+            tech.append("GPU")
             break
 
     # Check for RDMA patterns
@@ -382,14 +382,14 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in rdma_patterns:
         if re.search(pattern, content):
-            networking_tech.append("RDMA")
+            tech.append("RDMA")
             break
 
     # Check for bonding patterns
     bond_patterns = ["bond", "bonding", "team", "link.*aggregation", "failover"]
     for pattern in bond_patterns:
         if re.search(pattern, content):
-            networking_tech.append("Bonding")
+            tech.append("Bonding")
             break
 
     # Check for CNI patterns
@@ -403,7 +403,7 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in cni_patterns:
         if re.search(pattern, content):
-            networking_tech.append("CNI")
+            tech.append("CNI")
             break
 
     # Check for power management patterns
@@ -416,7 +416,7 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in power_patterns:
         if re.search(pattern, content):
-            networking_tech.append("Power Management")
+            tech.append("Power Management")
             break
 
     # Check for virtualization patterns
@@ -436,7 +436,7 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in virt_patterns:
         if re.search(pattern, content):
-            networking_tech.append("Virtualization")
+            tech.append("Virtualization")
             break
 
     # Check for storage patterns
@@ -456,7 +456,7 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in storage_patterns:
         if re.search(pattern, content):
-            networking_tech.append("Storage")
+            tech.append("Storage")
             break
 
     # Check for security patterns
@@ -477,7 +477,7 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in security_patterns:
         if re.search(pattern, content):
-            networking_tech.append("Security")
+            tech.append("Security")
             break
 
     # Check for monitoring/observability patterns
@@ -497,7 +497,7 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in monitoring_patterns:
         if re.search(pattern, content):
-            networking_tech.append("Monitoring")
+            tech.append("Monitoring")
             break
 
     # Check for machine learning/AI patterns
@@ -515,7 +515,7 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in ml_patterns:
         if re.search(pattern, content):
-            networking_tech.append("Machine Learning")
+            tech.append("Machine Learning")
             break
 
     # Check for edge computing patterns
@@ -531,10 +531,10 @@ def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> li
     ]
     for pattern in edge_patterns:
         if re.search(pattern, content):
-            networking_tech.append("Edge Computing")
+            tech.append("Edge Computing")
             break
 
-    return networking_tech
+    return tech
 
 
 def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
@@ -652,7 +652,7 @@ class TestVisitor(ast.NodeVisitor):
             "concurrency": [],
             "artifacts": [],
             "purpose": "",
-            "networking_tech": [],
+            "tech": [],
         }
         for dec in node.decorator_list:
             if (
@@ -791,7 +791,7 @@ class TestVisitor(ast.NodeVisitor):
             a.get("verb") in {"create", "delete", "patch", "replace", "watch"}
             for a in spec["actions"]
         ):
-            spec["level"] = "integration"
+            spec["test_type"] = "integration"
 
         bridges = set()
         for a in spec["actions"]:
@@ -815,7 +815,7 @@ class TestVisitor(ast.NodeVisitor):
             detect_dependencies(node.name, self.path, docstring, spec["actions"])
         )
         spec["environment"] = detect_environment(node.name, self.path, docstring)
-        spec["networking_tech"] = detect_networking_tech(
+        spec["tech"] = detect_tech(
             node.name, self.path, docstring
         )
 
