@@ -36,6 +36,7 @@ type KubeSpec struct {
 	Concurrency       []string            `json:"concurrency"`
 	Artifacts         []string            `json:"artifacts"`
 	Purpose           string              `json:"purpose"`
+	NetworkingTech    []string            `json:"networking_tech"` // SR-IOV, PTP, DPDK, GPU, etc.
 }
 
 var (
@@ -190,6 +191,14 @@ var (
 
 	// Purpose detection patterns - keywords that indicate test purpose
 	purposePatterns = map[string][]string{
+		// IP Stack patterns - check first for specificity
+		"DUAL_STACK_TESTING": {"dual", "stack", "dualstack", "ipv4.*ipv6", "ipv6.*ipv4", "both.*ip", "ipv4.*and.*ipv6", "ipv6.*and.*ipv4", "dualstack.*ipv4", "dualstack.*ipv6"},
+		"IPV4_ONLY_TESTING":  {"ipv4.*only", "single.*stack.*ipv4", "ipv4.*single", "no.*ipv6", "ipv4.*no.*ipv6", "ipv4.*first", "ipv4.*preferred", "ipv4.*primary"},
+		"IPV6_ONLY_TESTING":  {"ipv6.*only", "single.*stack.*ipv6", "ipv6.*single", "no.*ipv4", "ipv6.*no.*ipv4", "ipv6.*first", "ipv6.*preferred", "ipv6.*primary"},
+		// Networking technology patterns
+		"SRIOV_TESTING": {"sriov", "sr-iov", "single", "root", "iov", "vf", "pf", "virtual", "function", "networkattachment"},
+		"PTP_TESTING":   {"ptp", "precision", "time", "sync", "clock", "timing", "ptpoperator"},
+		// General purpose patterns
 		"NETWORK_CONNECTIVITY": {"curl", "url", "frr", "routing", "connectivity", "reach", "ping", "network", "traffic"},
 		"POD_HEALTH":           {"pods", "status", "running", "phase", "health", "ready", "condition", "state"},
 		"POD_MANAGEMENT":       {"create", "delete", "update", "pod", "deployment", "replica", "scale"},
@@ -200,9 +209,6 @@ var (
 		"SECURITY_TESTING":     {"security", "rbac", "scc", "psa", "permission", "access"},
 		"CONFIGURATION":        {"config", "configuration", "settings", "parameters", "env"},
 		"PERFORMANCE":          {"performance", "load", "stress", "benchmark", "latency", "throughput"},
-		"SRIOV_TESTING":        {"sriov", "sr-iov", "single", "root", "iov", "vf", "pf", "virtual", "function", "networkattachment"},
-		"DUAL_STACK_TESTING":   {"dual", "stack", "dualstack", "ipv4", "ipv6", "dual", "ip"},
-		"PTP_TESTING":          {"ptp", "precision", "time", "sync", "clock", "timing", "ptpoperator"},
 	}
 )
 
@@ -400,6 +406,97 @@ func detectEnvironment(testName, filePath string, comments []string) []string {
 	}
 
 	return environment
+}
+
+func detectNetworkingTech(testName, filePath string, comments []string) []string {
+	networkingTech := []string{}
+	content := strings.ToLower(testName + " " + filePath)
+	for _, comment := range comments {
+		content += " " + strings.ToLower(comment)
+	}
+
+	// Check for SR-IOV patterns
+	sriovPatterns := []string{"sriov", "sr-iov", "single.*root.*iov", "vf", "pf", "virtual.*function", "networkattachment"}
+	for _, pattern := range sriovPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "SR-IOV")
+			break
+		}
+	}
+
+	// Check for PTP patterns
+	ptpPatterns := []string{"ptp", "precision.*time", "time.*sync", "clock.*sync", "timing", "ptpoperator"}
+	for _, pattern := range ptpPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "PTP")
+			break
+		}
+	}
+
+	// Check for DPDK patterns
+	dpdkPatterns := []string{"dpdk", "data.*plane.*development.*kit", "userspace.*networking"}
+	for _, pattern := range dpdkPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "DPDK")
+			break
+		}
+	}
+
+	// Check for MetalLB patterns
+	metallbPatterns := []string{"metallb", "metal.*lb", "load.*balancer", "bfd", "bgp.*multiservice", "bgp.*unnumbered"}
+	for _, pattern := range metallbPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "MetalLB")
+			break
+		}
+	}
+
+	// Check for GPU patterns
+	gpuPatterns := []string{"gpu", "cuda", "nvidia", "amd.*gpu", "amdgpu", "kmm", "kernel.*module.*manager", "device.*plugin"}
+	for _, pattern := range gpuPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "GPU")
+			break
+		}
+	}
+
+	// Check for RDMA patterns
+	rdmaPatterns := []string{"rdma", "infiniband", "roce", "rdma.*metrics", "rdma.*api", "remote.*direct.*memory.*access"}
+	for _, pattern := range rdmaPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "RDMA")
+			break
+		}
+	}
+
+	// Check for bonding patterns
+	bondPatterns := []string{"bond", "bonding", "team", "link.*aggregation", "failover"}
+	for _, pattern := range bondPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Bonding")
+			break
+		}
+	}
+
+	// Check for CNI patterns
+	cniPatterns := []string{"cni", "container.*network.*interface", "tap", "macvlan", "bridge", "vlan"}
+	for _, pattern := range cniPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "CNI")
+			break
+		}
+	}
+
+	// Check for power management patterns
+	powerPatterns := []string{"power.*save", "powersave", "power.*management", "cpu.*frequency", "energy.*efficiency"}
+	for _, pattern := range powerPatterns {
+		if matched, _ := regexp.MatchString(pattern, content); matched {
+			networkingTech = append(networkingTech, "Power Management")
+			break
+		}
+	}
+
+	return networkingTech
 }
 
 func detectPurpose(testName string, comments []string, actions []Action, expectations []map[string]string) string {
@@ -1080,6 +1177,7 @@ func main() {
 				OpenShiftSpecific: []string{},
 				Concurrency:       []string{},
 				Artifacts:         []string{},
+				NetworkingTech:    []string{},
 			}
 			// Replace full path with basename in test_id
 			basename := filepath.Base(*root)
@@ -1237,6 +1335,7 @@ func main() {
 				// Detect purpose based on test content
 				comments := []string{} // TODO: Extract comments from AST
 				spec.Purpose = detectPurpose(spec.TestID, comments, spec.Actions, spec.Expectations)
+				spec.NetworkingTech = detectNetworkingTech(spec.TestID, path, comments)
 
 				b, _ := json.Marshal(spec)
 				fmt.Fprintln(out, string(b))
@@ -1308,6 +1407,7 @@ func main() {
 				OpenShiftSpecific: []string{},
 				Concurrency:       []string{},
 				Artifacts:         []string{},
+				NetworkingTech:    []string{},
 			}
 			// Replace full path with basename in test_id
 			basename := filepath.Base(*root)
@@ -1461,6 +1561,7 @@ func main() {
 			spec.TestType = detectTestType(spec.TestID, path, comments)
 			spec.Dependencies = detectDependencies(spec.TestID, path, comments, spec.Actions)
 			spec.Environment = detectEnvironment(spec.TestID, path, comments)
+			spec.NetworkingTech = detectNetworkingTech(spec.TestID, path, comments)
 
 			bridges := map[string]bool{}
 			for _, a := range spec.Actions {

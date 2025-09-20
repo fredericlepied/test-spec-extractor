@@ -51,7 +51,10 @@ def rerank_pair(spec_a: Dict[str, Any], spec_b: Dict[str, Any], repo_a="A", repo
         spec_a=json.dumps(spec_a, ensure_ascii=False),
         spec_b=json.dumps(spec_b, ensure_ascii=False),
     )
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}]
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
 
     for attempt in range(3):
         try:

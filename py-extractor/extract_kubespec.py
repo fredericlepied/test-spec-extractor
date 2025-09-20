@@ -20,6 +20,62 @@ SCC_CLI_PATTERNS = [
 
 # Purpose detection patterns - keywords that indicate test purpose
 PURPOSE_PATTERNS = {
+    # IP Stack patterns - check first for specificity
+    "DUAL_STACK_TESTING": [
+        "dual",
+        "stack",
+        "dualstack",
+        "ipv4.*ipv6",
+        "ipv6.*ipv4",
+        "both.*ip",
+        "ipv4.*and.*ipv6",
+        "ipv6.*and.*ipv4",
+        "dualstack.*ipv4",
+        "dualstack.*ipv6",
+    ],
+    "IPV4_ONLY_TESTING": [
+        "ipv4.*only",
+        "single.*stack.*ipv4",
+        "ipv4.*single",
+        "no.*ipv6",
+        "ipv4.*no.*ipv6",
+        "ipv4.*first",
+        "ipv4.*preferred",
+        "ipv4.*primary",
+    ],
+    "IPV6_ONLY_TESTING": [
+        "ipv6.*only",
+        "single.*stack.*ipv6",
+        "ipv6.*single",
+        "no.*ipv4",
+        "ipv6.*no.*ipv4",
+        "ipv6.*first",
+        "ipv6.*preferred",
+        "ipv6.*primary",
+    ],
+    # Networking technology patterns
+    "SRIOV_TESTING": [
+        "sriov",
+        "sr-iov",
+        "single",
+        "root",
+        "iov",
+        "vf",
+        "pf",
+        "virtual",
+        "function",
+        "networkattachment",
+    ],
+    "PTP_TESTING": [
+        "ptp",
+        "precision",
+        "time",
+        "sync",
+        "clock",
+        "timing",
+        "ptpoperator",
+    ],
+    # General purpose patterns
     "NETWORK_CONNECTIVITY": [
         "curl",
         "url",
@@ -31,36 +87,116 @@ PURPOSE_PATTERNS = {
         "network",
         "traffic",
     ],
-    "POD_HEALTH": ["pods", "status", "running", "phase", "health", "ready", "condition", "state"],
-    "POD_MANAGEMENT": ["create", "delete", "update", "pod", "deployment", "replica", "scale"],
-    "NETWORK_POLICY": ["policy", "network", "multinetwork", "ingress", "egress", "security"],
-    "RESOURCE_VALIDATION": ["count", "exist", "validation", "verify", "check", "assert"],
-    "OPERATOR_MANAGEMENT": ["operator", "subscription", "csv", "catalogsource", "installplan"],
+    "POD_HEALTH": [
+        "pods",
+        "status",
+        "running",
+        "phase",
+        "health",
+        "ready",
+        "condition",
+        "state",
+    ],
+    "POD_MANAGEMENT": [
+        "create",
+        "delete",
+        "update",
+        "pod",
+        "deployment",
+        "replica",
+        "scale",
+    ],
+    "NETWORK_POLICY": [
+        "policy",
+        "network",
+        "multinetwork",
+        "ingress",
+        "egress",
+        "security",
+    ],
+    "RESOURCE_VALIDATION": [
+        "count",
+        "exist",
+        "validation",
+        "verify",
+        "check",
+        "assert",
+    ],
+    "OPERATOR_MANAGEMENT": [
+        "operator",
+        "subscription",
+        "csv",
+        "catalogsource",
+        "installplan",
+    ],
     "STORAGE_TESTING": ["storage", "volume", "pvc", "pv", "mount", "filesystem"],
     "SECURITY_TESTING": ["security", "rbac", "scc", "psa", "permission", "access"],
     "CONFIGURATION": ["config", "configuration", "settings", "parameters", "env"],
-    "PERFORMANCE": ["performance", "load", "stress", "benchmark", "latency", "throughput"],
-    "SRIOV_TESTING": ["sriov", "sr-iov", "single", "root", "iov", "vf", "pf", "virtual", "function", "networkattachment"],
-    "DUAL_STACK_TESTING": ["dual", "stack", "dualstack", "ipv4", "ipv6", "dual", "ip"],
-    "PTP_TESTING": ["ptp", "precision", "time", "sync", "clock", "timing", "ptpoperator"],
+    "PERFORMANCE": [
+        "performance",
+        "load",
+        "stress",
+        "benchmark",
+        "latency",
+        "throughput",
+    ],
 }
 
 # Test type detection patterns
 TEST_TYPE_PATTERNS = {
     "unit": ["test", "Test", "unit", "Unit", "mock", "Mock"],
     "integration": ["integration", "Integration", "e2e", "E2E", "pytest", "Pytest"],
-    "performance": ["performance", "Performance", "benchmark", "Benchmark", "load", "Load", "stress", "Stress"],
-    "conformance": ["conformance", "Conformance", "k8s", "K8s", "kubernetes", "Kubernetes"],
+    "performance": [
+        "performance",
+        "Performance",
+        "benchmark",
+        "Benchmark",
+        "load",
+        "Load",
+        "stress",
+        "Stress",
+    ],
+    "conformance": [
+        "conformance",
+        "Conformance",
+        "k8s",
+        "K8s",
+        "kubernetes",
+        "Kubernetes",
+    ],
 }
 
 # Dependency detection patterns
 DEPENDENCY_PATTERNS = {
     "operator": ["operator", "Operator", "csv", "CSV", "subscription", "Subscription"],
     "storage": ["storage", "Storage", "pvc", "PVC", "pv", "PV", "volume", "Volume"],
-    "network": ["network", "Network", "cni", "CNI", "multus", "Multus", "sriov", "SR-IOV"],
+    "network": [
+        "network",
+        "Network",
+        "cni",
+        "CNI",
+        "multus",
+        "Multus",
+        "sriov",
+        "SR-IOV",
+    ],
     "security": ["security", "Security", "rbac", "RBAC", "scc", "SCC", "psa", "PSA"],
-    "monitoring": ["monitoring", "Monitoring", "prometheus", "Prometheus", "grafana", "Grafana"],
-    "logging": ["logging", "Logging", "fluentd", "Fluentd", "elasticsearch", "Elasticsearch"],
+    "monitoring": [
+        "monitoring",
+        "Monitoring",
+        "prometheus",
+        "Prometheus",
+        "grafana",
+        "Grafana",
+    ],
+    "logging": [
+        "logging",
+        "Logging",
+        "fluentd",
+        "Fluentd",
+        "elasticsearch",
+        "Elasticsearch",
+    ],
 }
 
 # Environment detection patterns
@@ -77,7 +213,7 @@ ENVIRONMENT_PATTERNS = {
 def detect_test_type(test_name: str, file_path: str, docstring: str) -> str:
     """Detect the type of test based on file path, test name, and content"""
     content = (test_name + " " + file_path + " " + (docstring or "")).lower()
-    
+
     scores = {}
     for test_type, patterns in TEST_TYPE_PATTERNS.items():
         score = 0
@@ -85,7 +221,7 @@ def detect_test_type(test_name: str, file_path: str, docstring: str) -> str:
             if pattern.lower() in content:
                 score += 1
         scores[test_type] = score
-    
+
     # Find the test type with highest score
     max_score = 0
     detected_type = "unknown"
@@ -93,18 +229,20 @@ def detect_test_type(test_name: str, file_path: str, docstring: str) -> str:
         if score > max_score:
             max_score = score
             detected_type = test_type
-    
+
     # Default to integration if it's a pytest test
     if detected_type == "unknown" and ("pytest" in content or "test" in content):
         detected_type = "integration"
-    
+
     return detected_type
 
 
-def detect_dependencies(test_name: str, file_path: str, docstring: str, actions: list) -> list:
+def detect_dependencies(
+    test_name: str, file_path: str, docstring: str, actions: list
+) -> list:
     """Detect required dependencies based on test content"""
     content = (test_name + " " + file_path + " " + (docstring or "")).lower()
-    
+
     # Add action-based dependencies
     for action in actions:
         gvk = action.get("gvk", "").lower()
@@ -116,33 +254,155 @@ def detect_dependencies(test_name: str, file_path: str, docstring: str, actions:
             content += " network"
         if "rbac" in gvk or "scc" in gvk or "security" in gvk:
             content += " security"
-    
+
     dependencies = []
     for dep_type, patterns in DEPENDENCY_PATTERNS.items():
         for pattern in patterns:
             if pattern.lower() in content:
                 dependencies.append(dep_type)
                 break
-    
+
     return dependencies
 
 
 def detect_environment(test_name: str, file_path: str, docstring: str) -> list:
     """Detect the target environment based on test content"""
     content = (test_name + " " + file_path + " " + (docstring or "")).lower()
-    
+
     environment = []
     for env_type, patterns in ENVIRONMENT_PATTERNS.items():
         for pattern in patterns:
             if pattern.lower() in content:
                 environment.append(env_type)
                 break
-    
+
     # Default to multi_node if no environment detected
     if not environment:
         environment = ["multi_node"]
-    
+
     return environment
+
+
+def detect_networking_tech(test_name: str, file_path: str, docstring: str) -> list:
+    """Detect networking technologies from test name, file path, and docstring."""
+    networking_tech = []
+    content = (test_name + " " + file_path + " " + (docstring or "")).lower()
+
+    # Check for SR-IOV patterns
+    sriov_patterns = [
+        "sriov",
+        "sr-iov",
+        "single.*root.*iov",
+        "vf",
+        "pf",
+        "virtual.*function",
+        "networkattachment",
+    ]
+    for pattern in sriov_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("SR-IOV")
+            break
+
+    # Check for PTP patterns
+    ptp_patterns = [
+        "ptp",
+        "precision.*time",
+        "time.*sync",
+        "clock.*sync",
+        "timing",
+        "ptpoperator",
+    ]
+    for pattern in ptp_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("PTP")
+            break
+
+    # Check for DPDK patterns
+    dpdk_patterns = ["dpdk", "data.*plane.*development.*kit", "userspace.*networking"]
+    for pattern in dpdk_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("DPDK")
+            break
+
+    # Check for MetalLB patterns
+    metallb_patterns = [
+        "metallb",
+        "metal.*lb",
+        "load.*balancer",
+        "bfd",
+        "bgp.*multiservice",
+        "bgp.*unnumbered",
+    ]
+    for pattern in metallb_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("MetalLB")
+            break
+
+    # Check for GPU patterns
+    gpu_patterns = [
+        "gpu",
+        "cuda",
+        "nvidia",
+        "amd.*gpu",
+        "amdgpu",
+        "kmm",
+        "kernel.*module.*manager",
+        "device.*plugin",
+    ]
+    for pattern in gpu_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("GPU")
+            break
+
+    # Check for RDMA patterns
+    rdma_patterns = [
+        "rdma",
+        "infiniband",
+        "roce",
+        "rdma.*metrics",
+        "rdma.*api",
+        "remote.*direct.*memory.*access",
+    ]
+    for pattern in rdma_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("RDMA")
+            break
+
+    # Check for bonding patterns
+    bond_patterns = ["bond", "bonding", "team", "link.*aggregation", "failover"]
+    for pattern in bond_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("Bonding")
+            break
+
+    # Check for CNI patterns
+    cni_patterns = [
+        "cni",
+        "container.*network.*interface",
+        "tap",
+        "macvlan",
+        "bridge",
+        "vlan",
+    ]
+    for pattern in cni_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("CNI")
+            break
+
+    # Check for power management patterns
+    power_patterns = [
+        "power.*save",
+        "powersave",
+        "power.*management",
+        "cpu.*frequency",
+        "energy.*efficiency",
+    ]
+    for pattern in power_patterns:
+        if re.search(pattern, content):
+            networking_tech.append("Power Management")
+            break
+
+    return networking_tech
 
 
 def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
@@ -196,7 +456,11 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
                 target = "resource_count"
             elif "online" in left.lower() or "status" in left.lower():
                 target = "resource_status"
-            elif "deleted" in left.lower() or "not in" in condition or "empty" in condition.lower():
+            elif (
+                "deleted" in left.lower()
+                or "not in" in condition
+                or "empty" in condition.lower()
+            ):
                 target = "resource_deletion"
             elif "version" in left.lower() or "image" in left.lower():
                 target = "resource_version"
@@ -209,9 +473,15 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
         if isinstance(op, (ast.In, ast.NotIn)):
             left = ast_to_string(assert_node.test.left)
             right = ast_to_string(assert_node.test.comparators[0])
-            condition = f"{left} {'not in' if isinstance(op, ast.NotIn) else 'in'} {right}"
+            condition = (
+                f"{left} {'not in' if isinstance(op, ast.NotIn) else 'in'} {right}"
+            )
             return {
-                "target": "resource_deletion" if isinstance(op, ast.NotIn) else "test_condition",
+                "target": (
+                    "resource_deletion"
+                    if isinstance(op, ast.NotIn)
+                    else "test_condition"
+                ),
                 "condition": condition,
             }
 
@@ -250,9 +520,13 @@ class TestVisitor(ast.NodeVisitor):
             "concurrency": [],
             "artifacts": [],
             "purpose": "",
+            "networking_tech": [],
         }
         for dec in node.decorator_list:
-            if isinstance(dec, ast.Call) and getattr(dec.func, "attr", "") == "parametrize":
+            if (
+                isinstance(dec, ast.Call)
+                and getattr(dec.func, "attr", "") == "parametrize"
+            ):
                 spec["dependencies"].append("parametrized")
         for n in ast.walk(node):
             if isinstance(n, ast.Call):
@@ -270,7 +544,9 @@ class TestVisitor(ast.NodeVisitor):
                             spec["actions"].append({"gvk": gvk, "verb": "get"})
                     elif n.args:
                         # For any arguments (including variables), add a generic action
-                        spec["actions"].append({"gvk": "unknown/unknown", "verb": "get"})
+                        spec["actions"].append(
+                            {"gvk": "unknown/unknown", "verb": "get"}
+                        )
 
                 # Check for attribute-based calls
                 elif isinstance(func, ast.Attribute):
@@ -309,7 +585,9 @@ class TestVisitor(ast.NodeVisitor):
                                 spec["actions"].append({"gvk": gvk, "verb": "get"})
                         elif n.args:
                             # For any arguments (including variables), add a generic action
-                            spec["actions"].append({"gvk": "unknown/unknown", "verb": "get"})
+                            spec["actions"].append(
+                                {"gvk": "unknown/unknown", "verb": "get"}
+                            )
                 if isinstance(func, ast.Attribute) and func.attr in {
                     "run",
                     "check_call",
@@ -340,10 +618,17 @@ class TestVisitor(ast.NodeVisitor):
                                     if k in low:
                                         m = re.search(k + r"=([^\s]+)", low)
                                         if m:
-                                            spec["dependencies"].append(f"psa:{k}={m.group(1)}")
-                            if any(p in low for p in [s.lower() for s in SCC_CLI_PATTERNS]):
+                                            spec["dependencies"].append(
+                                                f"psa:{k}={m.group(1)}"
+                                            )
+                            if any(
+                                p in low for p in [s.lower() for s in SCC_CLI_PATTERNS]
+                            ):
                                 spec["dependencies"].append("equiv:scc~psa")
-                            if isinstance(func, ast.Attribute) and func.attr == "raises":
+                            if (
+                                isinstance(func, ast.Attribute)
+                                and func.attr == "raises"
+                            ):
                                 if getattr(func.value, "id", "") == "pytest":
                                     spec["expectations"].append(
                                         {"target": "exception", "condition": "raises"}
@@ -394,9 +679,14 @@ class TestVisitor(ast.NodeVisitor):
         # Detect test type, dependencies, and environment
         docstring = ast.get_docstring(node) or ""
         spec["test_type"] = detect_test_type(node.name, self.path, docstring)
-        spec["dependencies"].extend(detect_dependencies(node.name, self.path, docstring, spec["actions"]))
+        spec["dependencies"].extend(
+            detect_dependencies(node.name, self.path, docstring, spec["actions"])
+        )
         spec["environment"] = detect_environment(node.name, self.path, docstring)
-        
+        spec["networking_tech"] = detect_networking_tech(
+            node.name, self.path, docstring
+        )
+
         # Detect purpose based on test content
         spec["purpose"] = detect_purpose(
             node.name, docstring, spec["actions"], spec["expectations"]
@@ -408,12 +698,18 @@ class TestVisitor(ast.NodeVisitor):
 def guess_gvk_from_attr(attr: ast.Attribute) -> str:
     root = attr
     while isinstance(root, ast.Attribute):
-        if isinstance(root.value, ast.Call) and isinstance(root.value.func, ast.Attribute):
+        if isinstance(root.value, ast.Call) and isinstance(
+            root.value.func, ast.Attribute
+        ):
             api = root.value.func.attr
             group, version = api_to_group_version(api)
             if group or version:
                 return f"{group+'/'+version if group else version}"
-        root = root.value if isinstance(root.value, ast.Attribute) else getattr(root, "value", None)
+        root = (
+            root.value
+            if isinstance(root.value, ast.Attribute)
+            else getattr(root, "value", None)
+        )
         if root is None:
             break
     return ""
@@ -553,7 +849,9 @@ def api_to_group_version(api: str):
     return ("", "")
 
 
-def detect_purpose(test_name: str, docstring: str, actions: list, expectations: list) -> str:
+def detect_purpose(
+    test_name: str, docstring: str, actions: list, expectations: list
+) -> str:
     """Analyze test content to determine its purpose"""
     # Combine all text content for analysis
     content = test_name.lower()
