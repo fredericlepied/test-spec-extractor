@@ -28,10 +28,10 @@ PURPOSE_COMPATIBILITY = {
     "POD_HEALTH": ["POD_MANAGEMENT"],  # Only direct pod-related purposes
     "NETWORK_POLICY": ["NETWORK_CONNECTIVITY"],  # Only network-related purposes
     "NETWORK_CONNECTIVITY": ["NETWORK_POLICY"],  # Only network-related purposes
-    "OPERATOR_MANAGEMENT": ["RESOURCE_VALIDATION"],  # Only with resource validation
+    "OPERATOR_MANAGEMENT": ["RESOURCE_VALIDATION", "UPGRADE_TESTING"],  # Only with resource validation and upgrade
     "STORAGE_TESTING": ["RESOURCE_VALIDATION"],  # Only with resource validation
     "SECURITY_TESTING": ["RESOURCE_VALIDATION"],  # Only with resource validation
-    "CONFIGURATION": ["RESOURCE_VALIDATION"],  # Only with resource validation
+    "CONFIGURATION": ["RESOURCE_VALIDATION", "UPGRADE_TESTING"],  # Only with resource validation and upgrade
     "PERFORMANCE": ["RESOURCE_VALIDATION"],  # Only with resource validation
     "RESOURCE_VALIDATION": [
         "OPERATOR_MANAGEMENT",
@@ -41,6 +41,7 @@ PURPOSE_COMPATIBILITY = {
         "PERFORMANCE",
     ],  # Removed network and pod purposes
     # Specialized testing purposes - only match with themselves or very specific others
+    "UPGRADE_TESTING": ["UPGRADE_TESTING", "OPERATOR_MANAGEMENT", "CONFIGURATION"],  # Upgrade can match with operator management and configuration
     "SRIOV_TESTING": [
         "SRIOV_TESTING",
         "NETWORK_POLICY",

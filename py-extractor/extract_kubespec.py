@@ -20,6 +20,23 @@ SCC_CLI_PATTERNS = [
 
 # Purpose detection patterns - keywords that indicate test purpose
 PURPOSE_PATTERNS = {
+    # Upgrade testing patterns - check first for specificity
+    "UPGRADE_TESTING": [
+        "upgrade",
+        "upgrading",
+        "upgraded",
+        "version.*upgrade",
+        "operator.*upgrade",
+        "subscription.*upgrade",
+        "csv.*upgrade",
+        "upgrade.*successfully",
+        "upgrade.*target",
+        "upgrade.*version",
+        "await.*upgrade",
+        "upgrade.*await",
+        "upgrade.*test",
+        "upgrade.*suite",
+    ],
     # IP Stack patterns - check first for specificity
     "DUAL_STACK_TESTING": [
         "dual",

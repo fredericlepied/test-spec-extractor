@@ -225,6 +225,8 @@ var (
 
 	// Purpose detection patterns - keywords that indicate test purpose
 	purposePatterns = map[string][]string{
+		// Upgrade testing patterns - check first for specificity
+		"UPGRADE_TESTING": {"upgrade", "upgrading", "upgraded", "version.*upgrade", "operator.*upgrade", "subscription.*upgrade", "csv.*upgrade", "upgrade.*successfully", "upgrade.*target", "upgrade.*version", "await.*upgrade", "upgrade.*await", "upgrade.*test", "upgrade.*suite"},
 		// IP Stack patterns - check first for specificity
 		"DUAL_STACK_TESTING": {"dual", "stack", "dualstack", "ipv4.*ipv6", "ipv6.*ipv4", "both.*ip", "ipv4.*and.*ipv6", "ipv6.*and.*ipv4", "dualstack.*ipv4", "dualstack.*ipv6"},
 		"IPV4_ONLY_TESTING":  {"ipv4.*only", "single.*stack.*ipv4", "ipv4.*single", "no.*ipv6", "ipv4.*no.*ipv6", "ipv4.*first", "ipv4.*preferred", "ipv4.*primary"},
