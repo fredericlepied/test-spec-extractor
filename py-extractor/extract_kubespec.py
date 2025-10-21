@@ -254,9 +254,7 @@ def detect_test_type(test_name: str, file_path: str, docstring: str) -> str:
     return detected_type
 
 
-def detect_dependencies(
-    test_name: str, file_path: str, docstring: str, actions: list
-) -> list:
+def detect_dependencies(test_name: str, file_path: str, docstring: str, actions: list) -> list:
     """Detect required dependencies based on test content"""
     content = (test_name + " " + file_path + " " + (docstring or "")).lower()
 
@@ -776,15 +774,9 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
         if isinstance(op, (ast.In, ast.NotIn)):
             left = ast_to_string(assert_node.test.left)
             right = ast_to_string(assert_node.test.comparators[0])
-            condition = (
-                f"{left} {'not in' if isinstance(op, ast.NotIn) else 'in'} {right}"
-            )
+            condition = f"{left} {'not in' if isinstance(op, ast.NotIn) else 'in'} {right}"
             return {
-                "target": (
-                    "resource_deletion"
-                    if isinstance(op, ast.NotIn)
-                    else "test_condition"
-                ),
+                "target": ("resource_deletion" if isinstance(op, ast.NotIn) else "test_condition"),
                 "condition": condition,
             }
 
@@ -827,14 +819,10 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
             condition = f"{args[0]} is {func_name == 'assertTrue'}"
             return {"target": "test_condition", "condition": condition}
         elif func_name in ["assertIn", "assertNotIn"] and len(args) >= 2:
-            condition = (
-                f"{args[1]} {'in' if func_name == 'assertIn' else 'not in'} {args[0]}"
-            )
+            condition = f"{args[1]} {'in' if func_name == 'assertIn' else 'not in'} {args[0]}"
             return {"target": "test_condition", "condition": condition}
         elif func_name in ["assertIsNone", "assertIsNotNone"] and len(args) >= 1:
-            condition = (
-                f"{args[0]} is {'None' if func_name == 'assertIsNone' else 'not None'}"
-            )
+            condition = f"{args[0]} is {'None' if func_name == 'assertIsNone' else 'not None'}"
             return {"target": "test_condition", "condition": condition}
         else:
             condition = f"{func_name}({', '.join(args)})"
@@ -904,7 +892,25 @@ class TestVisitor(ast.NodeVisitor):
             )  # retry decorators
         )
 
-        if not is_test_function:
+        # Check for Ginkgo patterns in the function
+        has_ginkgo_patterns = False
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call) and is_ginkgo_call(child):
+                has_ginkgo_patterns = True
+                break
+
+        # Check for step-like patterns (non-Ginkgo)
+        has_step_patterns = False
+        for child in ast.walk(node):
+            if (
+                (isinstance(child, ast.Call) and is_step_like_call(child))
+                or (isinstance(child, ast.FunctionDef) and is_step_like_function(child))
+                or (isinstance(child, ast.Expr) and is_step_comment(child))
+            ):
+                has_step_patterns = True
+                break
+
+        if not is_test_function and not has_ginkgo_patterns and not has_step_patterns:
             return
 
         # Create test_id with basename substitution
@@ -922,12 +928,10 @@ class TestVisitor(ast.NodeVisitor):
             "artifacts": [],
             "purpose": "",
             "tech": [],
+            "by_steps": [],  # Track operations in By(...) steps
         }
         for dec in node.decorator_list:
-            if (
-                isinstance(dec, ast.Call)
-                and getattr(dec.func, "attr", "") == "parametrize"
-            ):
+            if isinstance(dec, ast.Call) and getattr(dec.func, "attr", "") == "parametrize":
                 spec["dependencies"].append("parametrized")
         # First, detect cross-file actions
         cross_file_actions = self.detect_cross_file_actions(node)
@@ -950,14 +954,10 @@ class TestVisitor(ast.NodeVisitor):
                         spec["actions"].append({"gvk": "v1/Namespace", "verb": "list"})
                     elif func.id == "create_api_object":
                         # create_api_object() -> generic create operation
-                        spec["actions"].append(
-                            {"gvk": "unknown/unknown", "verb": "create"}
-                        )
+                        spec["actions"].append({"gvk": "unknown/unknown", "verb": "create"})
                     elif func.id == "delete_object":
                         # delete_object() -> generic delete operation
-                        spec["actions"].append(
-                            {"gvk": "unknown/unknown", "verb": "delete"}
-                        )
+                        spec["actions"].append({"gvk": "unknown/unknown", "verb": "delete"})
                     elif func.id in ["get_resource", "get_resource_from_namespace"]:
                         if n.args and isinstance(n.args[0], ast.Constant):
                             resource_name = n.args[0].value
@@ -969,9 +969,7 @@ class TestVisitor(ast.NodeVisitor):
                         elif n.args:
                             # For any arguments (including variables), add a generic action
                             verb = "list" if func.id == "get_resource" else "get"
-                            spec["actions"].append(
-                                {"gvk": "unknown/unknown", "verb": verb}
-                            )
+                            spec["actions"].append({"gvk": "unknown/unknown", "verb": verb})
 
                 # Check for attribute-based calls
                 elif isinstance(func, ast.Attribute):
@@ -1008,19 +1006,13 @@ class TestVisitor(ast.NodeVisitor):
                     ]:
                         if func.attr == "get_namespaces":
                             # get_namespaces() -> v1/Namespace:list
-                            spec["actions"].append(
-                                {"gvk": "v1/Namespace", "verb": "list"}
-                            )
+                            spec["actions"].append({"gvk": "v1/Namespace", "verb": "list"})
                         elif func.attr == "create_api_object":
                             # create_api_object() -> generic create operation
-                            spec["actions"].append(
-                                {"gvk": "unknown/unknown", "verb": "create"}
-                            )
+                            spec["actions"].append({"gvk": "unknown/unknown", "verb": "create"})
                         elif func.attr == "delete_object":
                             # delete_object() -> generic delete operation
-                            spec["actions"].append(
-                                {"gvk": "unknown/unknown", "verb": "delete"}
-                            )
+                            spec["actions"].append({"gvk": "unknown/unknown", "verb": "delete"})
                         elif func.attr in [
                             "get_resource",
                             "get_resource_from_namespace",
@@ -1030,16 +1022,12 @@ class TestVisitor(ast.NodeVisitor):
                                 gvk = map_resource_name_to_gvk(resource_name)
                                 if gvk:
                                     # Determine verb based on function name
-                                    verb = (
-                                        "list" if func.attr == "get_resource" else "get"
-                                    )
+                                    verb = "list" if func.attr == "get_resource" else "get"
                                     spec["actions"].append({"gvk": gvk, "verb": verb})
                             elif n.args:
                                 # For any arguments (including variables), add a generic action
                                 verb = "list" if func.attr == "get_resource" else "get"
-                                spec["actions"].append(
-                                    {"gvk": "unknown/unknown", "verb": verb}
-                                )
+                                spec["actions"].append({"gvk": "unknown/unknown", "verb": verb})
                 if isinstance(func, ast.Attribute) and func.attr in {
                     "run",
                     "check_call",
@@ -1070,17 +1058,10 @@ class TestVisitor(ast.NodeVisitor):
                                     if k in low:
                                         m = re.search(k + r"=([^\s]+)", low)
                                         if m:
-                                            spec["dependencies"].append(
-                                                f"psa:{k}={m.group(1)}"
-                                            )
-                            if any(
-                                p in low for p in [s.lower() for s in SCC_CLI_PATTERNS]
-                            ):
+                                            spec["dependencies"].append(f"psa:{k}={m.group(1)}")
+                            if any(p in low for p in [s.lower() for s in SCC_CLI_PATTERNS]):
                                 spec["dependencies"].append("equiv:scc~psa")
-                            if (
-                                isinstance(func, ast.Attribute)
-                                and func.attr == "raises"
-                            ):
+                            if isinstance(func, ast.Attribute) and func.attr == "raises":
                                 if getattr(func.value, "id", "") == "pytest":
                                     spec["expectations"].append(
                                         {"target": "exception", "condition": "raises"}
@@ -1137,6 +1118,15 @@ class TestVisitor(ast.NodeVisitor):
         spec["environment"] = detect_environment(node.name, self.path, docstring)
         spec["tech"] = detect_tech(node.name, self.path, docstring)
 
+        # Analyze By steps for more granular operation tracking
+        if has_ginkgo_patterns:
+            by_steps = analyze_by_steps_in_file(node)
+            spec["by_steps"] = by_steps
+        elif has_step_patterns:
+            # Use non-Ginkgo step patterns
+            step_patterns = analyze_step_patterns_in_file(node)
+            spec["by_steps"] = step_patterns
+
         # Detect purpose based on test content
         spec["purpose"] = detect_purpose(
             node.name, docstring, spec["actions"], spec["expectations"]
@@ -1185,6 +1175,7 @@ class TestVisitor(ast.NodeVisitor):
                     "artifacts": [],
                     "purpose": "",
                     "tech": [],
+                    "by_steps": [],  # Track operations in By(...) steps
                 }
 
                 # Extract docstring
@@ -1198,12 +1189,8 @@ class TestVisitor(ast.NodeVisitor):
 
                 # Detect test type, dependencies, environment
                 spec["test_type"] = detect_test_type(item.name, self.path, docstring)
-                spec["dependencies"] = detect_dependencies(
-                    item.name, self.path, docstring
-                )
-                spec["environment"] = detect_environment(
-                    item.name, self.path, docstring
-                )
+                spec["dependencies"] = detect_dependencies(item.name, self.path, docstring)
+                spec["environment"] = detect_environment(item.name, self.path, docstring)
 
                 # Process function body for actions and expectations
                 # First, detect cross-file actions
@@ -1221,17 +1208,11 @@ class TestVisitor(ast.NodeVisitor):
                             "delete_object",
                         ]:
                             if n.func.id == "get_namespaces":
-                                spec["actions"].append(
-                                    {"gvk": "v1/Namespace", "verb": "list"}
-                                )
+                                spec["actions"].append({"gvk": "v1/Namespace", "verb": "list"})
                             elif n.func.id == "create_api_object":
-                                spec["actions"].append(
-                                    {"gvk": "unknown/unknown", "verb": "create"}
-                                )
+                                spec["actions"].append({"gvk": "unknown/unknown", "verb": "create"})
                             elif n.func.id == "delete_object":
-                                spec["actions"].append(
-                                    {"gvk": "unknown/unknown", "verb": "delete"}
-                                )
+                                spec["actions"].append({"gvk": "unknown/unknown", "verb": "delete"})
                             elif n.func.id in [
                                 "get_resource",
                                 "get_resource_from_namespace",
@@ -1240,21 +1221,11 @@ class TestVisitor(ast.NodeVisitor):
                                     resource_name = n.args[0].value
                                     gvk = map_resource_name_to_gvk(resource_name)
                                     if gvk:
-                                        verb = (
-                                            "list"
-                                            if n.func.id == "get_resource"
-                                            else "get"
-                                        )
-                                        spec["actions"].append(
-                                            {"gvk": gvk, "verb": verb}
-                                        )
+                                        verb = "list" if n.func.id == "get_resource" else "get"
+                                        spec["actions"].append({"gvk": gvk, "verb": verb})
                                 elif n.args:
-                                    verb = (
-                                        "list" if n.func.id == "get_resource" else "get"
-                                    )
-                                    spec["actions"].append(
-                                        {"gvk": "unknown/unknown", "verb": verb}
-                                    )
+                                    verb = "list" if n.func.id == "get_resource" else "get"
+                                    spec["actions"].append({"gvk": "unknown/unknown", "verb": verb})
                         # Check for imported helper function calls (e.g., oc_helpers.get_resource)
                         elif isinstance(n.func, ast.Attribute) and n.func.attr in [
                             "get_resource",
@@ -1264,17 +1235,11 @@ class TestVisitor(ast.NodeVisitor):
                             "delete_object",
                         ]:
                             if n.func.attr == "get_namespaces":
-                                spec["actions"].append(
-                                    {"gvk": "v1/Namespace", "verb": "list"}
-                                )
+                                spec["actions"].append({"gvk": "v1/Namespace", "verb": "list"})
                             elif n.func.attr == "create_api_object":
-                                spec["actions"].append(
-                                    {"gvk": "unknown/unknown", "verb": "create"}
-                                )
+                                spec["actions"].append({"gvk": "unknown/unknown", "verb": "create"})
                             elif n.func.attr == "delete_object":
-                                spec["actions"].append(
-                                    {"gvk": "unknown/unknown", "verb": "delete"}
-                                )
+                                spec["actions"].append({"gvk": "unknown/unknown", "verb": "delete"})
                             elif n.func.attr in [
                                 "get_resource",
                                 "get_resource_from_namespace",
@@ -1283,23 +1248,11 @@ class TestVisitor(ast.NodeVisitor):
                                     resource_name = n.args[0].value
                                     gvk = map_resource_name_to_gvk(resource_name)
                                     if gvk:
-                                        verb = (
-                                            "list"
-                                            if n.func.attr == "get_resource"
-                                            else "get"
-                                        )
-                                        spec["actions"].append(
-                                            {"gvk": gvk, "verb": verb}
-                                        )
+                                        verb = "list" if n.func.attr == "get_resource" else "get"
+                                        spec["actions"].append({"gvk": gvk, "verb": verb})
                                 elif n.args:
-                                    verb = (
-                                        "list"
-                                        if n.func.attr == "get_resource"
-                                        else "get"
-                                    )
-                                    spec["actions"].append(
-                                        {"gvk": "unknown/unknown", "verb": verb}
-                                    )
+                                    verb = "list" if n.func.attr == "get_resource" else "get"
+                                    spec["actions"].append({"gvk": "unknown/unknown", "verb": verb})
                         # Check for subprocess calls (CLI commands)
                         elif isinstance(n.func, ast.Attribute) and n.func.attr == "run":
                             if (
@@ -1315,9 +1268,7 @@ class TestVisitor(ast.NodeVisitor):
                                         cmd = " ".join(cmd_parts)
                                         gvk, verb = map_command_to_api(cmd)
                                         if gvk and verb:
-                                            spec["actions"].append(
-                                                {"gvk": gvk, "verb": verb}
-                                            )
+                                            spec["actions"].append({"gvk": gvk, "verb": verb})
                     elif isinstance(n, ast.Assert):
                         expectation = extract_assertion_expectation(n)
                         if expectation:
@@ -1325,6 +1276,32 @@ class TestVisitor(ast.NodeVisitor):
 
                 # Add tech detection
                 spec["tech"] = detect_tech(item.name, self.path, docstring)
+
+                # Check for Ginkgo patterns and analyze By steps
+                has_ginkgo_patterns = False
+                for child in ast.walk(item):
+                    if isinstance(child, ast.Call) and is_ginkgo_call(child):
+                        has_ginkgo_patterns = True
+                        break
+
+                # Check for step-like patterns (non-Ginkgo)
+                has_step_patterns = False
+                for child in ast.walk(item):
+                    if (
+                        (isinstance(child, ast.Call) and is_step_like_call(child))
+                        or (isinstance(child, ast.FunctionDef) and is_step_like_function(child))
+                        or (isinstance(child, ast.Expr) and is_step_comment(child))
+                    ):
+                        has_step_patterns = True
+                        break
+
+                if has_ginkgo_patterns:
+                    by_steps = analyze_by_steps_in_file(item)
+                    spec["by_steps"] = by_steps
+                elif has_step_patterns:
+                    # Use non-Ginkgo step patterns
+                    step_patterns = analyze_step_patterns_in_file(item)
+                    spec["by_steps"] = step_patterns
 
                 self.specs.append(spec)
 
@@ -1379,24 +1356,15 @@ class TestVisitor(ast.NodeVisitor):
                                 resource_name = n.args[0].value
                                 gvk = map_resource_name_to_gvk(resource_name)
                                 if gvk:
-                                    verb = (
-                                        "list"
-                                        if "get_resource" in imported_name
-                                        else "get"
-                                    )
+                                    verb = "list" if "get_resource" in imported_name else "get"
                                     actions.append({"gvk": gvk, "verb": verb})
                             else:
-                                verb = (
-                                    "list" if "get_resource" in imported_name else "get"
-                                )
+                                verb = "list" if "get_resource" in imported_name else "get"
                                 actions.append({"gvk": "unknown/unknown", "verb": verb})
 
                 # Check for calls to functions from imported modules
                 elif isinstance(n.func, ast.Attribute):
-                    if (
-                        isinstance(n.func.value, ast.Name)
-                        and n.func.value.id in self.imports
-                    ):
+                    if isinstance(n.func.value, ast.Name) and n.func.value.id in self.imports:
                         module_name = self.imports[n.func.value.id]
                         func_name = n.func.attr
 
@@ -1414,13 +1382,9 @@ class TestVisitor(ast.NodeVisitor):
                             if func_name == "get_namespaces":
                                 actions.append({"gvk": "v1/Namespace", "verb": "list"})
                             elif func_name == "create_api_object":
-                                actions.append(
-                                    {"gvk": "unknown/unknown", "verb": "create"}
-                                )
+                                actions.append({"gvk": "unknown/unknown", "verb": "create"})
                             elif func_name == "delete_object":
-                                actions.append(
-                                    {"gvk": "unknown/unknown", "verb": "delete"}
-                                )
+                                actions.append({"gvk": "unknown/unknown", "verb": "delete"})
                             elif func_name in [
                                 "get_resource",
                                 "get_resource_from_namespace",
@@ -1429,19 +1393,11 @@ class TestVisitor(ast.NodeVisitor):
                                     resource_name = n.args[0].value
                                     gvk = map_resource_name_to_gvk(resource_name)
                                     if gvk:
-                                        verb = (
-                                            "list"
-                                            if func_name == "get_resource"
-                                            else "get"
-                                        )
+                                        verb = "list" if func_name == "get_resource" else "get"
                                         actions.append({"gvk": gvk, "verb": verb})
                                 else:
-                                    verb = (
-                                        "list" if func_name == "get_resource" else "get"
-                                    )
-                                    actions.append(
-                                        {"gvk": "unknown/unknown", "verb": verb}
-                                    )
+                                    verb = "list" if func_name == "get_resource" else "get"
+                                    actions.append({"gvk": "unknown/unknown", "verb": verb})
 
         return actions
 
@@ -1449,18 +1405,12 @@ class TestVisitor(ast.NodeVisitor):
 def guess_gvk_from_attr(attr: ast.Attribute) -> str:
     root = attr
     while isinstance(root, ast.Attribute):
-        if isinstance(root.value, ast.Call) and isinstance(
-            root.value.func, ast.Attribute
-        ):
+        if isinstance(root.value, ast.Call) and isinstance(root.value.func, ast.Attribute):
             api = root.value.func.attr
             group, version = api_to_group_version(api)
             if group or version:
                 return f"{group+'/'+version if group else version}"
-        root = (
-            root.value
-            if isinstance(root.value, ast.Attribute)
-            else getattr(root, "value", None)
-        )
+        root = root.value if isinstance(root.value, ast.Attribute) else getattr(root, "value", None)
         if root is None:
             break
     return ""
@@ -1617,9 +1567,556 @@ def api_to_group_version(api: str):
     return ("", "")
 
 
-def detect_purpose(
-    test_name: str, docstring: str, actions: list, expectations: list
-) -> str:
+def is_ginkgo_call(node: ast.Call) -> bool:
+    """Check if a call expression is a Ginkgo test construct"""
+    if isinstance(node.func, ast.Name):
+        return node.func.id in [
+            "Describe",
+            "It",
+            "By",
+            "Context",
+            "BeforeAll",
+            "AfterAll",
+            "BeforeEach",
+            "AfterEach",
+            "JustBeforeEach",
+            "JustAfterEach",
+            "Specify",
+            "When",
+            "Given",
+            "Then",
+            "And",
+            "But",
+            "FDescribe",
+            "FIt",
+            "FContext",
+            "FWhen",
+            "FSpecify",
+            "PDescribe",
+            "PIt",
+            "PContext",
+            "PWhen",
+            "PSpecify",
+            "XDescribe",
+            "XIt",
+            "XContext",
+            "XWhen",
+            "XSpecify",
+        ]
+    elif isinstance(node.func, ast.Attribute):
+        return node.func.attr in [
+            "Describe",
+            "It",
+            "By",
+            "Context",
+            "BeforeAll",
+            "AfterAll",
+            "BeforeEach",
+            "AfterEach",
+            "JustBeforeEach",
+            "JustAfterEach",
+            "Specify",
+            "When",
+            "Given",
+            "Then",
+            "And",
+            "But",
+            "FDescribe",
+            "FIt",
+            "FContext",
+            "FWhen",
+            "FSpecify",
+            "PDescribe",
+            "PIt",
+            "PContext",
+            "PWhen",
+            "PSpecify",
+            "XDescribe",
+            "XIt",
+            "XContext",
+            "XWhen",
+            "XSpecify",
+        ]
+    return False
+
+
+def is_step_like_call(node: ast.Call) -> bool:
+    """Check if a call expression represents a step-like pattern (non-Ginkgo)"""
+    if isinstance(node.func, ast.Name):
+        # Common step-like function names
+        step_names = [
+            "step",
+            "given",
+            "when",
+            "then",
+            "and",
+            "but",  # BDD patterns
+            "setup",
+            "teardown",
+            "before",
+            "after",  # Setup/teardown patterns
+            "arrange",
+            "act",
+            "assert",  # AAA pattern
+            "prepare",
+            "execute",
+            "verify",
+            "cleanup",  # Test phases
+            "precondition",
+            "action",
+            "postcondition",  # Formal testing
+            "initialize",
+            "configure",
+            "deploy",
+            "test",
+            "validate",
+            "cleanup",  # Common test steps
+        ]
+        return node.func.id.lower() in step_names
+
+    elif isinstance(node.func, ast.Attribute):
+        # Method calls that might be step-like
+        attr_name = node.func.attr.lower()
+        step_patterns = [
+            "step",
+            "given",
+            "when",
+            "then",
+            "and",
+            "but",
+            "setup",
+            "teardown",
+            "before",
+            "after",
+            "arrange",
+            "act",
+            "assert",
+            "prepare",
+            "execute",
+            "verify",
+            "cleanup",
+            "precondition",
+            "action",
+            "postcondition",
+            "initialize",
+            "configure",
+            "deploy",
+            "test",
+            "validate",
+            "cleanup",
+        ]
+        return attr_name in step_patterns
+
+    return False
+
+
+def is_step_comment(node: ast.Expr) -> bool:
+    """Check if a comment represents a step description"""
+    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+        comment = node.value.value.lower().strip()
+        step_indicators = [
+            "step",
+            "given",
+            "when",
+            "then",
+            "and",
+            "but",
+            "setup",
+            "teardown",
+            "before",
+            "after",
+            "arrange",
+            "act",
+            "assert",
+            "prepare",
+            "execute",
+            "verify",
+            "cleanup",
+            "precondition",
+            "action",
+            "postcondition",
+            "initialize",
+            "configure",
+            "deploy",
+            "test",
+            "validate",
+            "cleanup",
+        ]
+        return any(indicator in comment for indicator in step_indicators)
+    return False
+
+
+def is_step_decorator(node: ast.Call) -> bool:
+    """Check if a decorator represents a step pattern"""
+    if isinstance(node.func, ast.Name):
+        decorator_names = [
+            "step",
+            "given",
+            "when",
+            "then",
+            "and",
+            "but",
+            "setup",
+            "teardown",
+            "before",
+            "after",
+            "arrange",
+            "act",
+            "assert",
+            "prepare",
+            "execute",
+            "verify",
+            "cleanup",
+        ]
+        return node.func.id.lower() in decorator_names
+
+    elif isinstance(node.func, ast.Attribute):
+        return node.func.attr.lower() in ["step", "given", "when", "then", "and", "but"]
+
+    return False
+
+
+def is_by_call(node: ast.Call) -> bool:
+    """Check if a call expression is a By(...) call"""
+    if isinstance(node.func, ast.Name):
+        return node.func.id == "By"
+    elif isinstance(node.func, ast.Attribute):
+        return node.func.attr == "By"
+    return False
+
+
+def extract_by_description(by_call: ast.Call) -> str:
+    """Extract the description from a By(...) call"""
+    if not by_call.args:
+        return ""
+
+    # Get the first argument (the description)
+    arg = by_call.args[0]
+    if isinstance(arg, ast.Constant):
+        return str(arg.value)
+    elif hasattr(ast, "unparse"):
+        return ast.unparse(arg)
+    else:
+        return str(arg)
+
+
+def extract_step_description(step_call: ast.Call) -> str:
+    """Extract the description from a step-like call"""
+    if not step_call.args:
+        return ""
+
+    # Get the first argument (the description)
+    arg = step_call.args[0]
+    if isinstance(arg, ast.Constant):
+        return str(arg.value)
+    elif hasattr(ast, "unparse"):
+        return ast.unparse(arg)
+    else:
+        return str(arg)
+
+
+def extract_function_name_as_description(func_def: ast.FunctionDef) -> str:
+    """Extract function name as step description"""
+    return func_def.name.replace("_", " ").replace("test", "").strip()
+
+
+def extract_comment_as_description(comment_node: ast.Expr) -> str:
+    """Extract comment text as step description"""
+    if isinstance(comment_node.value, ast.Constant) and isinstance(comment_node.value.value, str):
+        return comment_node.value.value.strip()
+    return ""
+
+
+def find_operations_in_by_step(by_call: ast.Call) -> list:
+    """Find all operations within a By(...) step"""
+    operations = []
+
+    # For By(...) calls, we need to look at the function passed as the second argument
+    # By("description", func() { ... })
+    if len(by_call.args) >= 2:
+        func_arg = by_call.args[1]
+        if isinstance(func_arg, ast.Lambda):
+            # Analyze the lambda body for operations
+            operations.extend(analyze_node_for_operations(func_arg.body))
+        elif isinstance(func_arg, ast.Call):
+            # If it's a function call, analyze it
+            operations.extend(analyze_node_for_operations(func_arg))
+
+    return operations
+
+
+def analyze_node_for_operations(node: ast.AST) -> list:
+    """Analyze an AST node for Kubernetes operations"""
+    operations = []
+
+    for child in ast.walk(node):
+        if isinstance(child, ast.Call):
+            # Check for direct helper function calls
+            if isinstance(child.func, ast.Name) and child.func.id in [
+                "get_resource",
+                "get_resource_from_namespace",
+                "get_namespaces",
+                "create_api_object",
+                "delete_object",
+            ]:
+                if child.func.id == "get_namespaces":
+                    operations.append({"gvk": "v1/Namespace", "verb": "list"})
+                elif child.func.id == "create_api_object":
+                    operations.append({"gvk": "unknown/unknown", "verb": "create"})
+                elif child.func.id == "delete_object":
+                    operations.append({"gvk": "unknown/unknown", "verb": "delete"})
+                elif child.func.id in ["get_resource", "get_resource_from_namespace"]:
+                    if child.args and isinstance(child.args[0], ast.Constant):
+                        resource_name = child.args[0].value
+                        gvk = map_resource_name_to_gvk(resource_name)
+                        if gvk:
+                            verb = "list" if child.func.id == "get_resource" else "get"
+                            operations.append({"gvk": gvk, "verb": verb})
+                    else:
+                        verb = "list" if child.func.id == "get_resource" else "get"
+                        operations.append({"gvk": "unknown/unknown", "verb": verb})
+
+            # Check for attribute-based calls
+            elif isinstance(child.func, ast.Attribute):
+                attr_name = child.func.attr or ""
+                low = attr_name.lower()
+                if low.startswith(VERB_PREFIXES):
+                    verb = low.split("_", 1)[0]
+                    kind = low.split("_")[-1]
+                    operations.append(
+                        {
+                            "gvk": guess_gvk_from_attr(child.func),
+                            "verb": verb.replace("read", "get"),
+                            "fields": {"kind_hint": kind.capitalize()},
+                        }
+                    )
+
+                # Check for subprocess calls (CLI commands)
+                if attr_name in ["run", "check_call", "check_output"]:
+                    if getattr(child.func.value, "id", "") == "subprocess":
+                        args = []
+                        for a in child.args:
+                            if isinstance(a, ast.List):
+                                for el in a.elts:
+                                    if isinstance(el, ast.Constant):
+                                        args.append(str(el.value))
+                            elif isinstance(a, ast.Constant):
+                                args.append(str(a.value))
+                        cmd = " ".join(args)
+                        if CLI_RE.search(cmd):
+                            low_cmd = cmd.lower()
+                            gvk, verb = map_command_to_api(cmd, low_cmd)
+                            if gvk and verb:
+                                operations.append({"gvk": gvk, "verb": verb})
+
+    return operations
+
+
+def analyze_by_steps_in_file(tree: ast.AST) -> list:
+    """Analyze a file to find By(...) calls and their associated operations"""
+    by_steps = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and is_by_call(node):
+            description = extract_by_description(node)
+            operations = find_operations_in_by_step(node)
+
+            # Add By step information to each operation
+            for operation in operations:
+                operation["by_step"] = description
+
+            by_step = {
+                "description": description,
+                "actions": operations,
+                "line": getattr(node, "lineno", 0),
+            }
+            by_steps.append(by_step)
+
+    return by_steps
+
+
+def analyze_step_patterns_in_file(tree: ast.AST) -> list:
+    """Analyze a file to find step-like patterns (non-Ginkgo) and their associated operations"""
+    steps = []
+
+    for node in ast.walk(tree):
+        # Check for step-like function calls
+        if isinstance(node, ast.Call) and is_step_like_call(node):
+            description = extract_step_description(node)
+            operations = find_operations_in_step(node)
+
+            # Add step information to each operation
+            for operation in operations:
+                operation["step"] = description
+
+            step = {
+                "description": description,
+                "actions": operations,
+                "line": getattr(node, "lineno", 0),
+                "type": "function_call",
+            }
+            steps.append(step)
+
+        # Check for step-like function definitions
+        elif isinstance(node, ast.FunctionDef) and is_step_like_function(node):
+            description = extract_function_name_as_description(node)
+            operations = find_operations_in_function(node)
+
+            # Add step information to each operation
+            for operation in operations:
+                operation["step"] = description
+
+            step = {
+                "description": description,
+                "actions": operations,
+                "line": getattr(node, "lineno", 0),
+                "type": "function_definition",
+            }
+            steps.append(step)
+
+        # Check for step-like comments
+        elif isinstance(node, ast.Expr) and is_step_comment(node):
+            description = extract_comment_as_description(node)
+            # Find operations in the next few statements
+            operations = find_operations_after_comment(node, tree)
+
+            # Add step information to each operation
+            for operation in operations:
+                operation["step"] = description
+
+            step = {
+                "description": description,
+                "actions": operations,
+                "line": getattr(node, "lineno", 0),
+                "type": "comment",
+            }
+            steps.append(step)
+
+    return steps
+
+
+def is_step_like_function(func_def: ast.FunctionDef) -> bool:
+    """Check if a function definition represents a step-like pattern"""
+    func_name = func_def.name.lower()
+    step_patterns = [
+        "step",
+        "given",
+        "when",
+        "then",
+        "and",
+        "but",
+        "setup",
+        "teardown",
+        "before",
+        "after",
+        "arrange",
+        "act",
+        "assert",
+        "prepare",
+        "execute",
+        "verify",
+        "cleanup",
+        "precondition",
+        "action",
+        "postcondition",
+        "initialize",
+        "configure",
+        "deploy",
+        "test",
+        "validate",
+        "cleanup",
+    ]
+    return any(pattern in func_name for pattern in step_patterns)
+
+
+def find_operations_in_step(step_call: ast.Call) -> list:
+    """Find all operations within a step-like call"""
+    operations = []
+
+    # For step calls, we need to look at the function passed as argument
+    if len(step_call.args) >= 2:
+        func_arg = step_call.args[1]
+        if isinstance(func_arg, ast.Lambda):
+            operations.extend(analyze_node_for_operations(func_arg.body))
+        elif isinstance(func_arg, ast.Call):
+            operations.extend(analyze_node_for_operations(func_arg))
+
+    return operations
+
+
+def find_operations_in_function(func_def: ast.FunctionDef) -> list:
+    """Find all operations within a step-like function"""
+    operations = []
+
+    # Analyze the function body for operations
+    for child in ast.walk(func_def):
+        if isinstance(child, ast.Call):
+            # Check for direct helper function calls
+            if isinstance(child.func, ast.Name) and child.func.id in [
+                "get_resource",
+                "get_resource_from_namespace",
+                "get_namespaces",
+                "create_api_object",
+                "delete_object",
+            ]:
+                if child.func.id == "get_namespaces":
+                    operations.append({"gvk": "v1/Namespace", "verb": "list"})
+                elif child.func.id == "create_api_object":
+                    operations.append({"gvk": "unknown/unknown", "verb": "create"})
+                elif child.func.id == "delete_object":
+                    operations.append({"gvk": "unknown/unknown", "verb": "delete"})
+                elif child.func.id in ["get_resource", "get_resource_from_namespace"]:
+                    if child.args and isinstance(child.args[0], ast.Constant):
+                        resource_name = child.args[0].value
+                        gvk = map_resource_name_to_gvk(resource_name)
+                        if gvk:
+                            verb = "list" if child.func.id == "get_resource" else "get"
+                            operations.append({"gvk": gvk, "verb": verb})
+                    else:
+                        verb = "list" if child.func.id == "get_resource" else "get"
+                        operations.append({"gvk": "unknown/unknown", "verb": verb})
+
+    return operations
+
+
+def find_operations_after_comment(comment_node: ast.Expr, tree: ast.AST) -> list:
+    """Find operations in statements following a step comment"""
+    operations = []
+
+    # This is a simplified implementation - in practice, you'd need to track
+    # the AST structure to find the next few statements after the comment
+    # For now, we'll search the entire tree for operations
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            # Check for direct helper function calls
+            if isinstance(node.func, ast.Name) and node.func.id in [
+                "get_resource",
+                "get_resource_from_namespace",
+                "get_namespaces",
+                "create_api_object",
+                "delete_object",
+            ]:
+                if node.func.id == "get_namespaces":
+                    operations.append({"gvk": "v1/Namespace", "verb": "list"})
+                elif node.func.id == "create_api_object":
+                    operations.append({"gvk": "unknown/unknown", "verb": "create"})
+                elif node.func.id == "delete_object":
+                    operations.append({"gvk": "unknown/unknown", "verb": "delete"})
+                elif node.func.id in ["get_resource", "get_resource_from_namespace"]:
+                    if node.args and isinstance(node.args[0], ast.Constant):
+                        resource_name = node.args[0].value
+                        gvk = map_resource_name_to_gvk(resource_name)
+                        if gvk:
+                            verb = "list" if node.func.id == "get_resource" else "get"
+                            operations.append({"gvk": gvk, "verb": verb})
+                    else:
+                        verb = "list" if node.func.id == "get_resource" else "get"
+                        operations.append({"gvk": "unknown/unknown", "verb": verb})
+
+    return operations
+
+
+def detect_purpose(test_name: str, docstring: str, actions: list, expectations: list) -> str:
     """Analyze test content to determine its purpose"""
     # Combine all text content for analysis
     content = test_name.lower()

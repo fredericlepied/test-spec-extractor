@@ -79,8 +79,7 @@ def analyze_similarity_patterns(test_report):
         "high_similarity": len(test_report[test_report["blended_score"] >= 0.8]),
         "medium_similarity": len(
             test_report[
-                (test_report["blended_score"] >= 0.6)
-                & (test_report["blended_score"] < 0.8)
+                (test_report["blended_score"] >= 0.6) & (test_report["blended_score"] < 0.8)
             ]
         ),
         "low_similarity": len(test_report[test_report["blended_score"] < 0.6]),
@@ -187,9 +186,7 @@ def identify_potential_duplicates(test_report, go_specs, py_specs, threshold=0.9
     return duplicates
 
 
-def identify_complementary_tests(
-    test_report, go_specs, py_specs, score_range=(0.6, 0.8)
-):
+def identify_complementary_tests(test_report, go_specs, py_specs, score_range=(0.6, 0.8)):
     """Identify complementary tests that could benefit from cross-pollination."""
     complementary = []
 
@@ -235,9 +232,7 @@ def generate_match_type_analysis(test_report):
         analysis.append("**Match Type Distribution:**")
         for match_type, count in match_types.items():
             percentage = format_percentage(count, total_matches)
-            analysis.append(
-                f"- **{match_type}**: {format_number(count)} matches ({percentage})"
-            )
+            analysis.append(f"- **{match_type}**: {format_number(count)} matches ({percentage})")
         analysis.append("")
 
         # Analyze intra-language vs cross-language matches
@@ -303,14 +298,10 @@ def generate_executive_summary(patterns, signal_analysis, duplicates, complement
 
     # Quality indicators
     duplicate_ratio = (
-        len(duplicates) / patterns["total_matches"]
-        if patterns["total_matches"] > 0
-        else 0
+        len(duplicates) / patterns["total_matches"] if patterns["total_matches"] > 0 else 0
     )
     complementary_ratio = (
-        len(complementary) / patterns["total_matches"]
-        if patterns["total_matches"] > 0
-        else 0
+        len(complementary) / patterns["total_matches"] if patterns["total_matches"] > 0 else 0
     )
 
     summary.append("**Quality Indicators:**")
@@ -327,9 +318,7 @@ def generate_executive_summary(patterns, signal_analysis, duplicates, complement
 
     # Recommendations
     if duplicate_ratio > 0.1:
-        summary.append(
-            "⚠️ **High Duplicate Ratio**: Consider consolidating similar tests"
-        )
+        summary.append("⚠️ **High Duplicate Ratio**: Consider consolidating similar tests")
     elif duplicate_ratio < 0.05:
         summary.append("✅ **Low Duplicate Ratio**: Good test diversity")
 
@@ -341,9 +330,7 @@ def generate_executive_summary(patterns, signal_analysis, duplicates, complement
     if patterns["avg_score"] > 0.7:
         summary.append("🔍 **High Similarity**: Tests show strong functional overlap")
     elif patterns["avg_score"] < 0.4:
-        summary.append(
-            "📈 **Low Similarity**: Tests are quite different, good coverage diversity"
-        )
+        summary.append("📈 **Low Similarity**: Tests are quite different, good coverage diversity")
 
     summary.append("")
     return "\n".join(summary)
@@ -359,9 +346,7 @@ def generate_score_distribution(patterns, test_report):
     for label, count in patterns["score_distribution"].items():
         percentage = format_percentage(count, patterns["total_matches"])
         bar_length = (
-            int((count / patterns["total_matches"]) * 50)
-            if patterns["total_matches"] > 0
-            else 0
+            int((count / patterns["total_matches"]) * 50) if patterns["total_matches"] > 0 else 0
         )
         bar = "█" * bar_length + "░" * (50 - bar_length)
         dist.append(f"- **{label}**: {format_number(count)} ({percentage}) {bar}")
@@ -387,24 +372,14 @@ def generate_shared_signals_analysis(signal_analysis):
     signals.append("")
 
     signals.append("**Signal Type Distribution:**")
-    signals.append(
-        f"- **Exact Matches:** {format_number(signal_analysis['exact_matches'])}"
-    )
-    signals.append(
-        f"- **Resource Matches:** {format_number(signal_analysis['resource_matches'])}"
-    )
-    signals.append(
-        f"- **Category Matches:** {format_number(signal_analysis['category_matches'])}"
-    )
+    signals.append(f"- **Exact Matches:** {format_number(signal_analysis['exact_matches'])}")
+    signals.append(f"- **Resource Matches:** {format_number(signal_analysis['resource_matches'])}")
+    signals.append(f"- **Category Matches:** {format_number(signal_analysis['category_matches'])}")
     signals.append(
         f"- **Verb Group Matches:** {format_number(signal_analysis['verb_group_matches'])}"
     )
-    signals.append(
-        f"- **Purpose Matches:** {format_number(signal_analysis['purpose_matches'])}"
-    )
-    signals.append(
-        f"- **Technology Matches:** {format_number(signal_analysis['tech_matches'])}"
-    )
+    signals.append(f"- **Purpose Matches:** {format_number(signal_analysis['purpose_matches'])}")
+    signals.append(f"- **Technology Matches:** {format_number(signal_analysis['tech_matches'])}")
     signals.append("")
 
     signals.append("**Most Common Signal Types:**")
@@ -453,9 +428,7 @@ def generate_duplicate_analysis(duplicates):
     dup.append("**Recommendations:**")
     dup.append("- Review high confidence duplicates for consolidation opportunities")
     dup.append("- Consider creating shared test utilities for common patterns")
-    dup.append(
-        "- Document differences between similar tests to justify their existence"
-    )
+    dup.append("- Document differences between similar tests to justify their existence")
     dup.append("")
 
     return "\n".join(dup)
@@ -490,12 +463,8 @@ def generate_complementary_analysis(complementary):
     # Show examples
     comp.append("**Example Complementary Pairs:**")
     for i, comp_test in enumerate(complementary[:5], 1):  # Show top 5
-        comp.append(
-            f"{i}. **Go**: `{comp_test['go_test']}` ({comp_test['go_purpose']})"
-        )
-        comp.append(
-            f"   **Python**: `{comp_test['py_test']}` ({comp_test['py_purpose']})"
-        )
+        comp.append(f"{i}. **Go**: `{comp_test['go_test']}` ({comp_test['go_purpose']})")
+        comp.append(f"   **Python**: `{comp_test['py_test']}` ({comp_test['py_purpose']})")
         comp.append(f"   **Score**: {comp_test['score']:.3f}")
         comp.append(f"   **Suggestion**: {comp_test['suggestion']}")
         comp.append("")
@@ -543,9 +512,7 @@ def generate_top_matches(test_report, go_specs, py_specs, top_n=20):
     return "\n".join(top)
 
 
-def generate_insights_and_recommendations(
-    patterns, signal_analysis, duplicates, complementary
-):
+def generate_insights_and_recommendations(patterns, signal_analysis, duplicates, complementary):
     """Generate insights and recommendations."""
     insights = []
     insights.append("## 💡 Insights & Strategic Recommendations")
@@ -555,9 +522,7 @@ def generate_insights_and_recommendations(
     total_matches = patterns["total_matches"]
     duplicate_ratio = len(duplicates) / total_matches if total_matches > 0 else 0
     complementary_ratio = len(complementary) / total_matches if total_matches > 0 else 0
-    exact_match_ratio = (
-        signal_analysis["exact_matches"] / total_matches if total_matches > 0 else 0
-    )
+    exact_match_ratio = signal_analysis["exact_matches"] / total_matches if total_matches > 0 else 0
 
     insights.append("**Key Insights:**")
 
@@ -682,24 +647,18 @@ def generate_insights_and_recommendations(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate comprehensive similarity matches report"
-    )
+    parser = argparse.ArgumentParser(description="Generate comprehensive similarity matches report")
     parser.add_argument("--test-report", required=True, help="Test report CSV file")
     parser.add_argument("--test-coverage", required=True, help="Test coverage CSV file")
     parser.add_argument("--go-specs", required=True, help="Go specs JSONL file")
     parser.add_argument("--py-specs", required=True, help="Python specs JSONL file")
-    parser.add_argument(
-        "-o", "--output", help="Output file (default: similarity_report.md)"
-    )
+    parser.add_argument("-o", "--output", help="Output file (default: similarity_report.md)")
 
     args = parser.parse_args()
 
     # Load data
     print("Loading similarity data...")
-    test_report, test_coverage = load_similarity_data(
-        args.test_report, args.test_coverage
-    )
+    test_report, test_coverage = load_similarity_data(args.test_report, args.test_coverage)
     all_specs, go_specs, py_specs = load_all_specs(args.go_specs, args.py_specs)
 
     print("Analyzing similarity patterns...")
@@ -720,18 +679,14 @@ def main():
         f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
         f"**Analysis Type:** Language-agnostic similarity analysis\n",
         f"---\n",
-        generate_executive_summary(
-            patterns, signal_analysis, duplicates, complementary
-        ),
+        generate_executive_summary(patterns, signal_analysis, duplicates, complementary),
         generate_match_type_analysis(test_report),
         generate_score_distribution(patterns, test_report),
         generate_shared_signals_analysis(signal_analysis),
         generate_duplicate_analysis(duplicates),
         generate_complementary_analysis(complementary),
         generate_top_matches(test_report, all_specs, all_specs),
-        generate_insights_and_recommendations(
-            patterns, signal_analysis, duplicates, complementary
-        ),
+        generate_insights_and_recommendations(patterns, signal_analysis, duplicates, complementary),
     ]
 
     # Write report

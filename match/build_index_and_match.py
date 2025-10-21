@@ -109,9 +109,7 @@ RESOURCE_COMPATIBILITY = {
     ],
     # Cluster management resources (incompatible with each other)
     "config.openshift.io/v1/ClusterVersion": ["config.openshift.io/v1/ClusterVersion"],
-    "hive.openshift.io/v1/ClusterDeployment": [
-        "hive.openshift.io/v1/ClusterDeployment"
-    ],
+    "hive.openshift.io/v1/ClusterDeployment": ["hive.openshift.io/v1/ClusterDeployment"],
     "metal3.io/v1alpha1/BareMetalHost": ["metal3.io/v1alpha1/BareMetalHost"],
     # Network-related resources
     "v1/Service": ["v1/Service", "route.openshift.io/v1/Route"],
@@ -123,9 +121,7 @@ RESOURCE_COMPATIBILITY = {
     "operators.coreos.com/v1alpha1/ClusterServiceVersion": [
         "operators.coreos.com/v1alpha1/ClusterServiceVersion"
     ],
-    "operators.coreos.com/v1alpha1/Subscription": [
-        "operators.coreos.com/v1alpha1/Subscription"
-    ],
+    "operators.coreos.com/v1alpha1/Subscription": ["operators.coreos.com/v1alpha1/Subscription"],
 }
 
 # Technology compatibility matrix - expanded to include all technology domains
@@ -264,9 +260,7 @@ def is_tech_compatible(tech_a: List[str], tech_b: List[str]) -> bool:
     return False
 
 
-def calculate_functional_similarity(
-    spec_a: Dict[str, Any], spec_b: Dict[str, Any]
-) -> float:
+def calculate_functional_similarity(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> float:
     """Calculate functional similarity score based on test functionality overlap."""
     actions_a = spec_a.get("actions") or []
     actions_b = spec_b.get("actions") or []
@@ -562,6 +556,21 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
     if test_type:
         parts.append(f"test_type:{test_type}")
 
+    # ENHANCED: Include technology stack for better similarity
+    tech = spec.get("tech", [])
+    if tech:
+        parts.append(f"tech:{','.join(tech)}")
+
+    # ENHANCED: Include purpose for better similarity
+    purpose = spec.get("purpose", "")
+    if purpose:
+        parts.append(f"purpose:{purpose}")
+
+    # ENHANCED: Include environment for better similarity
+    environment = spec.get("environment", [])
+    if environment:
+        parts.append(f"env:{','.join(environment)}")
+
     # Handle None values by converting to empty lists
     dependencies = spec.get("dependencies") or []
     actions = spec.get("actions") or []
@@ -572,6 +581,11 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
     artifacts = spec.get("artifacts") or []
 
     parts += dependencies
+
+    # ENHANCED: Repeat technology after dependencies for increased weight
+    if tech:
+        parts.append(f"tech:{','.join(tech)}")
+
     for a in actions:
         gvk = a.get("gvk", "")
         kind_hint = (a.get("fields") or {}).get("kind_hint", "")
@@ -584,13 +598,55 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
             parts.append(gvk)
         elif verb:
             parts.append(f"verb:{verb}")
-    parts += [
-        f"expect:{e.get('target','')}={e.get('condition','')}" for e in expectations
-    ]
+
+    # ENHANCED: Repeat technology after actions for increased weight
+    if tech:
+        parts.append(f"tech:{','.join(tech)}")
+
+    parts += [f"expect:{e.get('target','')}={e.get('condition','')}" for e in expectations]
+
+    # ENHANCED: Repeat technology after expectations for increased weight
+    if tech:
+        parts.append(f"tech:{','.join(tech)}")
+
     parts += [f"ext:{x}" for x in externals]
     parts += openshift_specific
     parts += concurrency
     parts += artifacts
+
+    # ENHANCED: Include step data for better similarity
+    by_steps = spec.get("by_steps", [])
+    for step in by_steps:
+        description = step.get("description", "")
+        if description:
+            # Include step description for semantic similarity
+            parts.append(f"step:{description}")
+
+            # ENHANCED: Repeat technology in step context for increased weight
+            if tech:
+                parts.append(f"tech:{','.join(tech)}")
+
+            # Include step operations for functional similarity
+            step_actions = step.get("actions") or []
+            for action in step_actions:
+                gvk = action.get("gvk", "")
+                verb = action.get("verb", "")
+                if gvk and verb:
+                    parts.append(f"step_{gvk}:{verb}")
+                elif gvk:
+                    parts.append(f"step_{gvk}")
+                elif verb:
+                    parts.append(f"step_verb:{verb}")
+
+            # Include step type for pattern recognition
+            step_type = step.get("type", "")
+            if step_type:
+                parts.append(f"step_type:{step_type}")
+
+    # ENHANCED: Final technology repetition for maximum weight
+    if tech:
+        parts.append(f"tech:{','.join(tech)}")
+
     return "\n".join(map(str, parts))
 
 
@@ -607,9 +663,7 @@ def expand_equivalents(tokens: set) -> set:
 
 def build_embeddings(specs: List[Dict[str, Any]], model) -> np.ndarray:
     texts = [spec_to_text(s) for s in specs]
-    embs = model.encode(
-        texts, normalize_embeddings=True, show_progress_bar=True, batch_size=64
-    )
+    embs = model.encode(texts, normalize_embeddings=True, show_progress_bar=True, batch_size=64)
     return np.array(embs, dtype="float32")
 
 
@@ -691,9 +745,7 @@ def shared_signals(a: Dict[str, Any], b: Dict[str, Any]) -> str:
     signals = []
 
     # 1. Exact operation matches (GVK:verb)
-    ta, tb = expand_equivalents(tokens_from_spec(a)), expand_equivalents(
-        tokens_from_spec(b)
-    )
+    ta, tb = expand_equivalents(tokens_from_spec(a)), expand_equivalents(tokens_from_spec(b))
     exact_matches = sorted(ta & tb)
     if exact_matches:
         signals.extend([f"exact:{match}" for match in exact_matches])
@@ -745,9 +797,7 @@ def shared_signals(a: Dict[str, Any], b: Dict[str, Any]) -> str:
         if common_techs:
             signals.append(f"tech:{','.join(sorted(common_techs))}")
         elif is_tech_compatible(tech_a, tech_b):
-            signals.append(
-                f"tech_compatible:{','.join(sorted(tech_a))}~{','.join(sorted(tech_b))}"
-            )
+            signals.append(f"tech_compatible:{','.join(sorted(tech_a))}~{','.join(sorted(tech_b))}")
 
     return ";".join(signals)
 
@@ -783,7 +833,14 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
             tech_b = specs_b[j].get("tech", [])
             tech_boost = 0.0
 
-            if tech_a and tech_b:
+            # ENHANCED: Technology-aware penalty for mismatches
+            if tech_a and not tech_b:
+                # Technology-specific test vs generic test - heavy penalty
+                tech_boost = -0.4
+            elif tech_b and not tech_a:
+                # Generic test vs technology-specific test - heavy penalty
+                tech_boost = -0.4
+            elif tech_a and tech_b:
                 common_techs = set(tech_a) & set(tech_b)
                 if common_techs:
                     tech_boost = 0.04 * min(
@@ -792,7 +849,7 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
                 elif is_tech_compatible(tech_a, tech_b):
                     tech_boost = 0.02  # Tiny boost for compatible technologies
                 else:
-                    tech_boost = -0.03  # Tiny penalty for incompatible technologies
+                    tech_boost = -0.2  # Medium penalty for incompatible technologies
 
             # Functional similarity scoring
             functional_score = calculate_functional_similarity(specs_a[i], specs_b[j])
@@ -802,15 +859,9 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
 
             if shared:
                 # Count different types of shared signals
-                exact_count = len(
-                    [s for s in shared.split(";") if s.startswith("exact:")]
-                )
-                resource_count = len(
-                    [s for s in shared.split(";") if s.startswith("resource:")]
-                )
-                category_count = len(
-                    [s for s in shared.split(";") if s.startswith("category:")]
-                )
+                exact_count = len([s for s in shared.split(";") if s.startswith("exact:")])
+                resource_count = len([s for s in shared.split(";") if s.startswith("resource:")])
+                category_count = len([s for s in shared.split(";") if s.startswith("category:")])
                 verb_group_count = len(
                     [s for s in shared.split(";") if s.startswith("verb_group:")]
                 )
@@ -836,11 +887,7 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
 
                 boosted_score = min(
                     1.0,
-                    float(sc)
-                    + signal_boost
-                    + purpose_boost
-                    + tech_boost
-                    + functional_boost,
+                    float(sc) + signal_boost + purpose_boost + tech_boost + functional_boost,
                 )
             else:
                 boosted_score = min(
@@ -922,9 +969,7 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
                 tech_compatible_matches.append(p)
 
         # Check functional similarity
-        functional_score = calculate_functional_similarity(
-            specs_a[idx_a], specs_b[idx_b]
-        )
+        functional_score = calculate_functional_similarity(specs_a[idx_a], specs_b[idx_b])
         if functional_score > 0.3:  # Threshold for meaningful functional similarity
             functional_matches.append(p)
 
@@ -948,9 +993,7 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
             * 100
         )
         tech_rate = (
-            (len(tech_same_matches) + len(tech_compatible_matches))
-            / len(high_sim_matches)
-            * 100
+            (len(tech_same_matches) + len(tech_compatible_matches)) / len(high_sim_matches) * 100
         )
         functional_rate = len(functional_matches) / len(high_sim_matches) * 100
         print(f"Operation validation rate: {validation_rate:.1f}%")
@@ -964,9 +1007,7 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
             )
             print("   These may be false positives based on text similarity alone.")
         else:
-            print(
-                "✅ Good validation rate - most high-similarity matches have shared operations!"
-            )
+            print("✅ Good validation rate - most high-similarity matches have shared operations!")
 
     return shared_ops_matches
 
@@ -1056,9 +1097,7 @@ def main():
     ap.add_argument("--py", required=True, help="JSONL from Python extractor")
     ap.add_argument("--out", default="report.csv")
     ap.add_argument("--cov", default="coverage_matrix.csv")
-    ap.add_argument(
-        "--llm", action="store_true", help="use LLM re-ranking (env vars required)"
-    )
+    ap.add_argument("--llm", action="store_true", help="use LLM re-ranking (env vars required)")
     args = ap.parse_args()
 
     # Load and combine all specs regardless of language
@@ -1109,9 +1148,7 @@ def main():
 
     # Apply purpose-based filtering to reduce false positives
     print(f"Before purpose filtering: {len(filtered_pairs)} matches")
-    filtered_pairs = filter_by_purpose_compatibility(
-        filtered_pairs, all_specs, all_specs
-    )
+    filtered_pairs = filter_by_purpose_compatibility(filtered_pairs, all_specs, all_specs)
     print(f"After purpose filtering: {len(filtered_pairs)} matches")
 
     if args.llm:

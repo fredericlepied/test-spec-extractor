@@ -23,6 +23,13 @@ type Action struct {
 	Fields    map[string]interface{} `json:"fields,omitempty"`
 	Condition string                 `json:"condition,omitempty"`
 	Count     int                    `json:"count,omitempty"`
+	ByStep    string                 `json:"by_step,omitempty"` // Track which By(...) step this action belongs to
+}
+
+type ByStep struct {
+	Description string   `json:"description"`
+	Actions     []Action `json:"actions"`
+	Line        int      `json:"line,omitempty"`
 }
 
 type KubeSpec struct {
@@ -36,7 +43,8 @@ type KubeSpec struct {
 	Concurrency       []string            `json:"concurrency"`
 	Artifacts         []string            `json:"artifacts"`
 	Purpose           string              `json:"purpose"`
-	Tech              []string            `json:"tech"` // SR-IOV, PTP, DPDK, GPU, Virtualization, Storage, etc.
+	Tech              []string            `json:"tech"`               // SR-IOV, PTP, DPDK, GPU, Virtualization, Storage, etc.
+	BySteps           []ByStep            `json:"by_steps,omitempty"` // Track operations in By(...) steps
 }
 
 // MarshalJSON ensures that nil slices are marshaled as empty arrays instead of null
@@ -68,6 +76,9 @@ func (ks KubeSpec) MarshalJSON() ([]byte, error) {
 	}
 	if ks.Tech == nil {
 		ks.Tech = []string{}
+	}
+	if ks.BySteps == nil {
+		ks.BySteps = []ByStep{}
 	}
 
 	return json.Marshal((Alias)(ks))
@@ -1119,6 +1130,151 @@ func astToString(node ast.Node) string {
 	}
 }
 
+// extractByStepDescription extracts the description from a By(...) call
+func extractByStepDescription(call *ast.CallExpr) string {
+	if len(call.Args) == 0 {
+		return ""
+	}
+
+	// Get the first argument (the description)
+	arg := call.Args[0]
+	return astToString(arg)
+}
+
+// isByCall checks if a call expression is a By(...) call
+func isByCall(call *ast.CallExpr) bool {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "By"
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		return ident.Name == "By"
+	}
+	return false
+}
+
+// findOperationsAfterBy finds all operations that occur after a By(...) call
+func findOperationsAfterBy(byCall *ast.CallExpr, fset *token.FileSet, parentNode ast.Node) []Action {
+	var operations []Action
+
+	// For By(...) calls, we need to look at the function passed as the second argument
+	// By("description", func() { ... })
+	if len(byCall.Args) >= 2 {
+		if funcLit, ok := byCall.Args[1].(*ast.FuncLit); ok {
+			// Analyze the function body for operations
+			operations = analyzeStatementForOperations(funcLit.Body, fset)
+		}
+	}
+
+	return operations
+}
+
+// analyzeStatementForOperations analyzes a statement for Kubernetes operations
+func analyzeStatementForOperations(stmt ast.Stmt, fset *token.FileSet) []Action {
+	var operations []Action
+
+	// Handle BlockStmt (function bodies) by analyzing each statement
+	if block, ok := stmt.(*ast.BlockStmt); ok {
+		for _, s := range block.List {
+			stmtOps := analyzeStatementForOperations(s, fset)
+			operations = append(operations, stmtOps...)
+		}
+		return operations
+	}
+
+	ast.Inspect(stmt, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			// Check for eco-goinfra patterns
+			if gvk, verb := detectEcoGoinfraPattern(x); gvk != "" || verb != "" {
+				action := Action{}
+				if gvk != "" {
+					action.GVK = gvk
+				}
+				if verb != "" {
+					action.Verb = strings.ToLower(verb)
+				}
+				operations = append(operations, action)
+			}
+
+			// Check for helper function patterns
+			if gvk, verb := detectHelperFunctionPattern(x); gvk != "" || verb != "" {
+				action := Action{}
+				if gvk != "" {
+					action.GVK = gvk
+				}
+				if verb != "" {
+					action.Verb = strings.ToLower(verb)
+				}
+				operations = append(operations, action)
+			}
+
+			// Check for standard Kubernetes API calls
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+				if verbSet[sel.Sel.Name] {
+					operations = append(operations, Action{Verb: strings.ToLower(sel.Sel.Name)})
+				}
+			}
+
+			// Check for external commands and map to API operations
+			if exts := detectExternals(x); len(exts) > 0 {
+				for _, ext := range exts {
+					if gvk, verb := mapCommandToAPI(ext); gvk != "" && verb != "" {
+						operations = append(operations, Action{GVK: gvk, Verb: strings.ToLower(verb)})
+					}
+				}
+			}
+
+		case *ast.CompositeLit:
+			// Check for Kubernetes composite literals
+			if gvk, osh := kindFromCompositeLit(x); gvk != "" {
+				action := Action{GVK: gvk}
+				if osh != "" {
+					action.GVK = osh // Use OpenShift-specific GVK if available
+				}
+				operations = append(operations, action)
+			}
+
+			// Check for Kubernetes API types in composite literals
+			if gvk := detectK8sTypePattern(x); gvk != "" {
+				operations = append(operations, Action{GVK: gvk})
+			}
+		}
+		return true
+	})
+
+	return operations
+}
+
+// analyzeBySteps analyzes a file to find By(...) calls and their associated operations
+func analyzeBySteps(f *ast.File, fset *token.FileSet) []ByStep {
+	var bySteps []ByStep
+
+	ast.Inspect(f, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && isByCall(call) {
+			description := extractByStepDescription(call)
+			line := fset.Position(call.Pos()).Line
+
+			// Find operations that occur after this By call
+			operations := findOperationsAfterBy(call, fset, f)
+
+			// Add By step information to each action
+			for i := range operations {
+				operations[i].ByStep = description
+			}
+
+			byStep := ByStep{
+				Description: description,
+				Actions:     operations,
+				Line:        line,
+			}
+			bySteps = append(bySteps, byStep)
+		}
+		return true
+	})
+
+	return bySteps
+}
+
 func detectExternals(call *ast.CallExpr) []string {
 	var externals []string
 
@@ -1474,8 +1630,12 @@ func main() {
 				spec.Dependencies = append(spec.Dependencies, k)
 			}
 
+			// Analyze By steps for more granular operation tracking
+			bySteps := analyzeBySteps(f, fset)
+			spec.BySteps = bySteps
+
 			// Only output if we found meaningful patterns
-			if len(spec.Actions) > 0 || len(spec.OpenShiftSpecific) > 0 || len(spec.Dependencies) > 0 {
+			if len(spec.Actions) > 0 || len(spec.OpenShiftSpecific) > 0 || len(spec.Dependencies) > 0 || len(spec.BySteps) > 0 {
 				// Detect purpose based on test content
 				comments := []string{} // TODO: Extract comments from AST
 				spec.Purpose = detectPurpose(spec.TestID, comments, spec.Actions, spec.Expectations)
