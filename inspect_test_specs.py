@@ -121,73 +121,83 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
 def generate_simplified_text_representation(spec: Dict[str, Any]) -> str:
     """Generate a simplified text representation when the full module is not available"""
     parts = []
-
+    
     # Basic test information
     test_id = spec.get("test_id", "")
     if test_id:
-        parts.append(f"test_id:{test_id}")
-
+        parts.append(f"TEST_ID: {test_id}")
+    
     test_type = spec.get("test_type", "")
     if test_type:
-        parts.append(f"test_type:{test_type}")
-
+        parts.append(f"TEST_TYPE: {test_type}")
+    
     # Technology
     tech = spec.get("tech", [])
     if tech:
-        parts.append(f"tech:{','.join(tech)}")
-
+        parts.append(f"TECHNOLOGY: {', '.join(tech)}")
+    
     # Purpose
     purpose = spec.get("purpose", "")
     if purpose:
-        parts.append(f"purpose:{purpose}")
-
+        parts.append(f"PURPOSE: {purpose}")
+    
     # Environment
     environment = spec.get("environment", [])
     if environment:
-        parts.append(f"env:{','.join(environment)}")
-
+        parts.append(f"ENVIRONMENT: {', '.join(environment)}")
+    
     # Dependencies
     dependencies = spec.get("dependencies", [])
-    parts.extend(dependencies)
-
+    if dependencies:
+        parts.append("DEPENDENCIES:")
+        for dep in dependencies:
+            parts.append(f"  - {dep}")
+    
     # Actions
     actions = spec.get("actions", [])
-    for action in actions:
-        gvk = action.get("gvk", "")
-        verb = action.get("verb", "")
-        if gvk and verb:
-            parts.append(f"{gvk}:{verb}")
-        elif gvk:
-            parts.append(gvk)
-        elif verb:
-            parts.append(f"verb:{verb}")
-
-    # Expectations
-    expectations = spec.get("expectations", [])
-    for exp in expectations:
-        target = exp.get("target", "")
-        condition = exp.get("condition", "")
-        if target and condition:
-            parts.append(f"expect:{target}={condition}")
-
-    # By steps
-    by_steps = spec.get("by_steps", [])
-    for step in by_steps:
-        description = step.get("description", "")
-        if description:
-            parts.append(f"step:{description}")
-
-        step_actions = step.get("actions", [])
-        for action in step_actions:
+    if actions:
+        parts.append("OPERATIONS:")
+        for action in actions:
             gvk = action.get("gvk", "")
             verb = action.get("verb", "")
             if gvk and verb:
-                parts.append(f"step_{gvk}:{verb}")
+                parts.append(f"  - {gvk}:{verb}")
             elif gvk:
-                parts.append(f"step_{gvk}")
+                parts.append(f"  - {gvk}")
             elif verb:
-                parts.append(f"step_verb:{verb}")
-
+                parts.append(f"  - verb:{verb}")
+    
+    # Expectations
+    expectations = spec.get("expectations", [])
+    if expectations:
+        parts.append("EXPECTATIONS:")
+        for exp in expectations:
+            target = exp.get("target", "")
+            condition = exp.get("condition", "")
+            if target and condition:
+                parts.append(f"  - {target}={condition}")
+    
+    # By steps
+    by_steps = spec.get("by_steps", [])
+    if by_steps:
+        parts.append("STEPS:")
+        for step in by_steps:
+            description = step.get("description", "")
+            if description:
+                parts.append(f"  - {description}")
+            
+            step_actions = step.get("actions", [])
+            if step_actions:
+                for action in step_actions:
+                    gvk = action.get("gvk", "")
+                    verb = action.get("verb", "")
+                    if gvk and verb:
+                        parts.append(f"    - {gvk}:{verb}")
+                    elif gvk:
+                        parts.append(f"    - {gvk}")
+                    elif verb:
+                        parts.append(f"    - verb:{verb}")
+    
     return "\n".join(parts)
 
 

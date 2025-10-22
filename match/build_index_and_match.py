@@ -548,106 +548,120 @@ def filter_empty_tests(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def spec_to_text(spec: Dict[str, Any]) -> str:
+    """Generate structured text representation that preserves JSON semantics"""
     # Don't include test_id in the content - it's used as document ID
     parts = []
 
-    # Include test_type field to differentiate empty tests
+    # Test metadata section
     test_type = spec.get("test_type", "unknown")
     if test_type:
-        parts.append(f"test_type:{test_type}")
+        parts.append(f"TEST_TYPE: {test_type}")
 
-    # ENHANCED: Include technology stack for better similarity
+    # Technology section (once, not repeated)
     tech = spec.get("tech", [])
     if tech:
-        parts.append(f"tech:{','.join(tech)}")
+        parts.append(f"TECHNOLOGY: {', '.join(tech)}")
 
-    # ENHANCED: Include purpose for better similarity
+    # Purpose section
     purpose = spec.get("purpose", "")
     if purpose:
-        parts.append(f"purpose:{purpose}")
+        parts.append(f"PURPOSE: {purpose}")
 
-    # ENHANCED: Include environment for better similarity
+    # Environment section
     environment = spec.get("environment", [])
     if environment:
-        parts.append(f"env:{','.join(environment)}")
+        parts.append(f"ENVIRONMENT: {', '.join(environment)}")
 
-    # Handle None values by converting to empty lists
+    # Dependencies section
     dependencies = spec.get("dependencies") or []
+    if dependencies:
+        parts.append("DEPENDENCIES:")
+        for dep in dependencies:
+            parts.append(f"  - {dep}")
+
+    # Operations section with structure
     actions = spec.get("actions") or []
+    if actions:
+        parts.append("OPERATIONS:")
+        for action in actions:
+            gvk = action.get("gvk", "")
+            kind_hint = (action.get("fields") or {}).get("kind_hint", "")
+            verb = action.get("verb", "")
+            if gvk and kind_hint and "/" not in gvk:
+                gvk = f"{gvk}/{kind_hint}"
+            if gvk and verb:
+                parts.append(f"  - {gvk}:{verb}")
+            elif gvk:
+                parts.append(f"  - {gvk}")
+            elif verb:
+                parts.append(f"  - verb:{verb}")
+
+    # Expectations section
     expectations = spec.get("expectations") or []
+    if expectations:
+        parts.append("EXPECTATIONS:")
+        for exp in expectations:
+            target = exp.get("target", "")
+            condition = exp.get("condition", "")
+            if target and condition:
+                parts.append(f"  - {target}={condition}")
+
+    # External dependencies section
     externals = spec.get("externals") or []
+    if externals:
+        parts.append("EXTERNAL_DEPENDENCIES:")
+        for ext in externals:
+            parts.append(f"  - {ext}")
+
+    # OpenShift specific section
     openshift_specific = spec.get("openshift_specific") or []
+    if openshift_specific:
+        parts.append("OPENSHIFT_SPECIFIC:")
+        for openshift in openshift_specific:
+            parts.append(f"  - {openshift}")
+
+    # Concurrency section
     concurrency = spec.get("concurrency") or []
+    if concurrency:
+        parts.append("CONCURRENCY:")
+        for conc in concurrency:
+            parts.append(f"  - {conc}")
+
+    # Artifacts section
     artifacts = spec.get("artifacts") or []
+    if artifacts:
+        parts.append("ARTIFACTS:")
+        for artifact in artifacts:
+            parts.append(f"  - {artifact}")
 
-    parts += dependencies
-
-    # ENHANCED: Repeat technology after dependencies for increased weight
-    if tech:
-        parts.append(f"tech:{','.join(tech)}")
-
-    for a in actions:
-        gvk = a.get("gvk", "")
-        kind_hint = (a.get("fields") or {}).get("kind_hint", "")
-        verb = a.get("verb", "")
-        if gvk and kind_hint and "/" not in gvk:
-            gvk = f"{gvk}/{kind_hint}"
-        if gvk and verb:
-            parts.append(f"{gvk}:{verb}")
-        elif gvk:
-            parts.append(gvk)
-        elif verb:
-            parts.append(f"verb:{verb}")
-
-    # ENHANCED: Repeat technology after actions for increased weight
-    if tech:
-        parts.append(f"tech:{','.join(tech)}")
-
-    parts += [f"expect:{e.get('target','')}={e.get('condition','')}" for e in expectations]
-
-    # ENHANCED: Repeat technology after expectations for increased weight
-    if tech:
-        parts.append(f"tech:{','.join(tech)}")
-
-    parts += [f"ext:{x}" for x in externals]
-    parts += openshift_specific
-    parts += concurrency
-    parts += artifacts
-
-    # ENHANCED: Include step data for better similarity
+    # Steps section with hierarchical structure
     by_steps = spec.get("by_steps", [])
-    for step in by_steps:
-        description = step.get("description", "")
-        if description:
-            # Include step description for semantic similarity
-            parts.append(f"step:{description}")
+    if by_steps:
+        parts.append("STEPS:")
+        for step in by_steps:
+            description = step.get("description", "")
+            if description:
+                parts.append(f"  - {description}")
 
-            # ENHANCED: Repeat technology in step context for increased weight
-            if tech:
-                parts.append(f"tech:{','.join(tech)}")
+                # Step operations
+                step_actions = step.get("actions") or []
+                if step_actions:
+                    for action in step_actions:
+                        gvk = action.get("gvk", "")
+                        verb = action.get("verb", "")
+                        if gvk and verb:
+                            parts.append(f"    - {gvk}:{verb}")
+                        elif gvk:
+                            parts.append(f"    - {gvk}")
+                        elif verb:
+                            parts.append(f"    - verb:{verb}")
 
-            # Include step operations for functional similarity
-            step_actions = step.get("actions") or []
-            for action in step_actions:
-                gvk = action.get("gvk", "")
-                verb = action.get("verb", "")
-                if gvk and verb:
-                    parts.append(f"step_{gvk}:{verb}")
-                elif gvk:
-                    parts.append(f"step_{gvk}")
-                elif verb:
-                    parts.append(f"step_verb:{verb}")
+                # Step type
+                step_type = step.get("type", "")
+                if step_type:
+                    parts.append(f"    - type:{step_type}")
 
-            # Include step type for pattern recognition
-            step_type = step.get("type", "")
-            if step_type:
-                parts.append(f"step_type:{step_type}")
-
-    # ENHANCED: Final technology repetition for maximum weight
-    if tech:
-        parts.append(f"tech:{','.join(tech)}")
-
-    return "\n".join(map(str, parts))
+    return "\n".join(parts)
 
 
 def expand_equivalents(tokens: set) -> set:
