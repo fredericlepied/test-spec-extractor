@@ -160,28 +160,46 @@ def analyze_shared_signals(test_report):
 def identify_potential_duplicates(test_report, go_specs, py_specs, threshold=0.95):
     """Identify potential duplicate tests."""
     duplicates = []
+    go_specs_count = len(go_specs)
 
     for _, row in test_report.iterrows():
         if row["blended_score"] >= threshold:
-            go_idx = int(row["idx_a"])
-            py_idx = int(row["idx_b"])
+            idx_a = int(row["idx_a"])
+            idx_b = int(row["idx_b"])
 
-            if go_idx < len(go_specs) and py_idx < len(py_specs):
-                go_test = go_specs[go_idx]
-                py_test = py_specs[py_idx]
+            # Determine which specs to use based on indices
+            if idx_a < go_specs_count:
+                # idx_a is a Go spec
+                test_a = go_specs[idx_a]
+                test_a_lang = "go"
+            else:
+                # idx_a is a Python spec
+                test_a = py_specs[idx_a - go_specs_count]
+                test_a_lang = "py"
 
-                duplicates.append(
-                    {
-                        "go_test": go_test["test_id"],
-                        "py_test": py_test["test_id"],
-                        "score": row["blended_score"],
-                        "shared_signals": row["shared_signals"],
-                        "go_purpose": go_test.get("purpose", "Unknown"),
-                        "py_purpose": py_test.get("purpose", "Unknown"),
-                        "go_actions": len(go_test.get("actions", [])),
-                        "py_actions": len(py_test.get("actions", [])),
-                    }
-                )
+            if idx_b < go_specs_count:
+                # idx_b is a Go spec
+                test_b = go_specs[idx_b]
+                test_b_lang = "go"
+            else:
+                # idx_b is a Python spec
+                test_b = py_specs[idx_b - go_specs_count]
+                test_b_lang = "py"
+
+            duplicates.append(
+                {
+                    "go_test": test_a["test_id"],  # This will be renamed to test_a
+                    "py_test": test_b["test_id"],  # This will be renamed to test_b
+                    "score": row["blended_score"],
+                    "shared_signals": row["shared_signals"],
+                    "go_purpose": test_a.get("purpose", "Unknown"),
+                    "py_purpose": test_b.get("purpose", "Unknown"),
+                    "go_actions": len(test_a.get("actions", [])),
+                    "py_actions": len(test_b.get("actions", [])),
+                    "a_language": test_a_lang,
+                    "b_language": test_b_lang,
+                }
+            )
 
     return duplicates
 
@@ -189,32 +207,50 @@ def identify_potential_duplicates(test_report, go_specs, py_specs, threshold=0.9
 def identify_complementary_tests(test_report, go_specs, py_specs, score_range=(0.6, 0.8)):
     """Identify complementary tests that could benefit from cross-pollination."""
     complementary = []
+    go_specs_count = len(go_specs)
 
     for _, row in test_report.iterrows():
         if score_range[0] <= row["blended_score"] < score_range[1]:
-            go_idx = int(row["idx_a"])
-            py_idx = int(row["idx_b"])
+            idx_a = int(row["idx_a"])
+            idx_b = int(row["idx_b"])
 
-            if go_idx < len(go_specs) and py_idx < len(py_specs):
-                go_test = go_specs[go_idx]
-                py_test = py_specs[py_idx]
+            # Determine which specs to use based on indices
+            if idx_a < go_specs_count:
+                # idx_a is a Go spec
+                test_a = go_specs[idx_a]
+                test_a_lang = "go"
+            else:
+                # idx_a is a Python spec
+                test_a = py_specs[idx_a - go_specs_count]
+                test_a_lang = "py"
 
-                # Check if they have different purposes but similar operations
-                go_purpose = go_test.get("purpose", "Unknown")
-                py_purpose = py_test.get("purpose", "Unknown")
+            if idx_b < go_specs_count:
+                # idx_b is a Go spec
+                test_b = go_specs[idx_b]
+                test_b_lang = "go"
+            else:
+                # idx_b is a Python spec
+                test_b = py_specs[idx_b - go_specs_count]
+                test_b_lang = "py"
 
-                if go_purpose != py_purpose:
-                    complementary.append(
-                        {
-                            "go_test": go_test["test_id"],
-                            "py_test": py_test["test_id"],
-                            "score": row["blended_score"],
-                            "go_purpose": go_purpose,
-                            "py_purpose": py_purpose,
-                            "shared_signals": row["shared_signals"],
-                            "suggestion": f"Consider combining {go_purpose} and {py_purpose} approaches",
-                        }
-                    )
+            # Check if they have different purposes but similar operations
+            test_a_purpose = test_a.get("purpose", "Unknown")
+            test_b_purpose = test_b.get("purpose", "Unknown")
+
+            if test_a_purpose != test_b_purpose:
+                complementary.append(
+                    {
+                        "go_test": test_a["test_id"],  # This will be renamed to test_a
+                        "py_test": test_b["test_id"],  # This will be renamed to test_b
+                        "score": row["blended_score"],
+                        "go_purpose": test_a_purpose,
+                        "py_purpose": test_b_purpose,
+                        "shared_signals": row["shared_signals"],
+                        "suggestion": f"Consider combining {test_a_purpose} and {test_b_purpose} approaches",
+                        "a_language": test_a_lang,
+                        "b_language": test_b_lang,
+                    }
+                )
 
     return complementary
 
@@ -411,8 +447,11 @@ def generate_duplicate_analysis(duplicates):
     if high_dup:
         dup.append("**🔴 High Confidence Duplicates (≥0.98):**")
         for i, dup_test in enumerate(high_dup[:10], 1):  # Show top 10
-            dup.append(f"{i}. **Go**: `{dup_test['go_test']}`")
-            dup.append(f"   **Python**: `{dup_test['py_test']}`")
+            # Determine language labels based on actual match type
+            a_lang = dup_test.get("a_language", "Go").title()
+            b_lang = dup_test.get("b_language", "Python").title()
+            dup.append(f"{i}. **{a_lang}**: `{dup_test['go_test']}`")
+            dup.append(f"   **{b_lang}**: `{dup_test['py_test']}`")
             dup.append(f"   **Score**: {dup_test['score']:.3f}")
             dup.append(f"   **Shared**: {dup_test['shared_signals']}")
             dup.append("")
@@ -420,8 +459,11 @@ def generate_duplicate_analysis(duplicates):
     if medium_dup:
         dup.append("**🟡 Medium Confidence Duplicates (0.95-0.98):**")
         for i, dup_test in enumerate(medium_dup[:5], 1):  # Show top 5
-            dup.append(f"{i}. **Go**: `{dup_test['go_test']}`")
-            dup.append(f"   **Python**: `{dup_test['py_test']}`")
+            # Determine language labels based on actual match type
+            a_lang = dup_test.get("a_language", "Go").title()
+            b_lang = dup_test.get("b_language", "Python").title()
+            dup.append(f"{i}. **{a_lang}**: `{dup_test['go_test']}`")
+            dup.append(f"   **{b_lang}**: `{dup_test['py_test']}`")
             dup.append(f"   **Score**: {dup_test['score']:.3f}")
             dup.append("")
 
@@ -463,8 +505,11 @@ def generate_complementary_analysis(complementary):
     # Show examples
     comp.append("**Example Complementary Pairs:**")
     for i, comp_test in enumerate(complementary[:5], 1):  # Show top 5
-        comp.append(f"{i}. **Go**: `{comp_test['go_test']}` ({comp_test['go_purpose']})")
-        comp.append(f"   **Python**: `{comp_test['py_test']}` ({comp_test['py_purpose']})")
+        # Determine language labels based on actual match type
+        a_lang = comp_test.get("a_language", "Go").title()
+        b_lang = comp_test.get("b_language", "Python").title()
+        comp.append(f"{i}. **{a_lang}**: `{comp_test['go_test']}` ({comp_test['go_purpose']})")
+        comp.append(f"   **{b_lang}**: `{comp_test['py_test']}` ({comp_test['py_purpose']})")
         comp.append(f"   **Score**: {comp_test['score']:.3f}")
         comp.append(f"   **Suggestion**: {comp_test['suggestion']}")
         comp.append("")
@@ -503,9 +548,13 @@ def generate_top_matches(test_report, go_specs, py_specs, top_n=20):
         if py_idx < len(py_specs):
             py_test_name = py_specs[py_idx]["test_id"]
 
+        # Determine language labels based on actual match type
+        a_lang = row.get("a_language", "Go").title()
+        b_lang = row.get("b_language", "Python").title()
+
         top.append(f"**{i}. Score: {row['blended_score']:.3f}**")
-        top.append(f"- **Go**: `{go_test_name}`")
-        top.append(f"- **Python**: `{py_test_name}`")
+        top.append(f"- **{a_lang}**: `{go_test_name}`")
+        top.append(f"- **{b_lang}**: `{py_test_name}`")
         top.append(f"- **Shared Signals**: {row['shared_signals']}")
         top.append("")
 
