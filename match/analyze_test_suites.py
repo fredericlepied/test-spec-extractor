@@ -152,10 +152,7 @@ def generate_insights(analysis):
     # Environment insights
     if analysis["environments"]:
         env_list = ", ".join(
-            [
-                f"{env} ({count})"
-                for env, count in analysis["environments"].most_common(3)
-            ]
+            [f"{env} ({count})" for env, count in analysis["environments"].most_common(3)]
         )
         insights.append(f"Target environments: {env_list}")
 
@@ -307,9 +304,7 @@ def print_suite_analysis(analysis):
     print(f"  Total Tests: {analysis['total_tests']}")
     print(f"  Unique Operations: {analysis['coverage_metrics']['unique_operations']}")
     print(f"  Unique Resources: {analysis['coverage_metrics']['unique_resources']}")
-    print(
-        f"  Avg Operations/Test: {analysis['coverage_metrics']['avg_operations_per_test']:.1f}"
-    )
+    print(f"  Avg Operations/Test: {analysis['coverage_metrics']['avg_operations_per_test']:.1f}")
 
     print(f"\n🎯 TEST TYPES:")
     for test_type, count in analysis["test_distribution"]["by_type"].items():
@@ -367,9 +362,7 @@ def print_suite_comparison(comparison):
         for op in comparison["operation_gaps"]["unique_to_suite1"][:5]:
             print(f"    • {op}")
         if len(comparison["operation_gaps"]["unique_to_suite1"]) > 5:
-            print(
-                f"    ... and {len(comparison['operation_gaps']['unique_to_suite1']) - 5} more"
-            )
+            print(f"    ... and {len(comparison['operation_gaps']['unique_to_suite1']) - 5} more")
 
     if comparison["operation_gaps"]["unique_to_suite2"]:
         print(
@@ -378,9 +371,7 @@ def print_suite_comparison(comparison):
         for op in comparison["operation_gaps"]["unique_to_suite2"][:5]:
             print(f"    • {op}")
         if len(comparison["operation_gaps"]["unique_to_suite2"]) > 5:
-            print(
-                f"    ... and {len(comparison['operation_gaps']['unique_to_suite2']) - 5} more"
-            )
+            print(f"    ... and {len(comparison['operation_gaps']['unique_to_suite2']) - 5} more")
 
     print(f"\n🎯 PURPOSE GAPS:")
     if comparison["purpose_gaps"]["unique_to_suite1"]:
@@ -425,15 +416,11 @@ def analyze_individual_suites(specs, suite_type):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Analyze test suites and identify gaps"
-    )
+    parser = argparse.ArgumentParser(description="Analyze test suites and identify gaps")
     parser.add_argument("--go", help="Go specs JSONL file")
     parser.add_argument("--py", help="Python specs JSONL file")
     parser.add_argument("--output", help="Output directory for analysis results")
-    parser.add_argument(
-        "--compare", action="store_true", help="Compare all test suites"
-    )
+    parser.add_argument("--compare", action="store_true", help="Compare all test suites")
 
     args = parser.parse_args()
 

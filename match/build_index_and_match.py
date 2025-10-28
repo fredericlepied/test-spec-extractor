@@ -39,6 +39,7 @@ PURPOSE_COMPATIBILITY = {
         "UPGRADE_TESTING",
     ],  # Only with resource validation and upgrade
     "PERFORMANCE": ["RESOURCE_VALIDATION"],  # Only with resource validation
+    "WEBHOOK_TESTING": [],  # Only matches with itself - highly specialized
     "RESOURCE_VALIDATION": [
         "OPERATOR_MANAGEMENT",
         "STORAGE_TESTING",
@@ -109,9 +110,7 @@ RESOURCE_COMPATIBILITY = {
     ],
     # Cluster management resources (incompatible with each other)
     "config.openshift.io/v1/ClusterVersion": ["config.openshift.io/v1/ClusterVersion"],
-    "hive.openshift.io/v1/ClusterDeployment": [
-        "hive.openshift.io/v1/ClusterDeployment"
-    ],
+    "hive.openshift.io/v1/ClusterDeployment": ["hive.openshift.io/v1/ClusterDeployment"],
     "metal3.io/v1alpha1/BareMetalHost": ["metal3.io/v1alpha1/BareMetalHost"],
     # Network-related resources
     "v1/Service": ["v1/Service", "route.openshift.io/v1/Route"],
@@ -123,9 +122,7 @@ RESOURCE_COMPATIBILITY = {
     "operators.coreos.com/v1alpha1/ClusterServiceVersion": [
         "operators.coreos.com/v1alpha1/ClusterServiceVersion"
     ],
-    "operators.coreos.com/v1alpha1/Subscription": [
-        "operators.coreos.com/v1alpha1/Subscription"
-    ],
+    "operators.coreos.com/v1alpha1/Subscription": ["operators.coreos.com/v1alpha1/Subscription"],
 }
 
 # Technology compatibility matrix - expanded to include all technology domains
@@ -264,9 +261,7 @@ def is_tech_compatible(tech_a: List[str], tech_b: List[str]) -> bool:
     return False
 
 
-def calculate_functional_similarity(
-    spec_a: Dict[str, Any], spec_b: Dict[str, Any]
-) -> float:
+def calculate_functional_similarity(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> float:
     """Calculate functional similarity score based on test functionality overlap."""
     actions_a = spec_a.get("actions") or []
     actions_b = spec_b.get("actions") or []
@@ -353,7 +348,7 @@ def calculate_functional_similarity(
 
     resource_matches = resources_a & resources_b
 
-    # Calculate weighted similarity score
+    # Calculate weighted similarity score with reduced framework bias
     exact_score = len(exact_ops) * 1.0
     category_score = len(category_matches) * 0.7
     resource_score = len(resource_matches) * 0.3
@@ -365,17 +360,367 @@ def calculate_functional_similarity(
     if total_ops == 0:
         return 0.0
 
+    # Apply framework bias reduction
+    framework_penalty = calculate_framework_bias_penalty(spec_a, spec_b)
+
+    # Apply cross-language penalty
+    cross_language_penalty = calculate_cross_language_penalty(spec_a, spec_b)
+
     functional_score = (exact_score + category_score + resource_score) / total_ops
     if total_expectations > 0:
         functional_score += expectation_score / total_expectations * 0.2
 
+    # Apply both framework and cross-language penalties to reduce false positives
+    functional_score *= (1.0 - framework_penalty) * (1.0 - cross_language_penalty)
+
     return min(1.0, functional_score)
+
+
+def calculate_framework_bias_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> float:
+    """Calculate penalty for framework-heavy matches to reduce false positives."""
+    test_id_a = spec_a.get("test_id", "").lower()
+    test_id_b = spec_b.get("test_id", "").lower()
+    actions_a = spec_a.get("actions") or []
+    actions_b = spec_b.get("actions") or []
+
+    penalty = 0.0
+
+    # Framework infrastructure operations that shouldn't drive similarity
+    framework_ops = {
+        "v1/Namespace:create",
+        "v1/Namespace:delete",  # Basic test setup
+        "v1/ConfigMap:create",
+        "v1/ConfigMap:delete",  # Basic configuration
+        "v1/Pod:create",
+        "v1/Pod:delete",  # Basic pod operations
+    }
+
+    ops_a = set()
+    ops_b = set()
+
+    for action in actions_a:
+        gvk = action.get("gvk", "")
+        verb = action.get("verb", "")
+        if gvk and verb:
+            ops_a.add(f"{gvk}:{verb}")
+
+    for action in actions_b:
+        gvk = action.get("gvk", "")
+        verb = action.get("verb", "")
+        if gvk and verb:
+            ops_b.add(f"{gvk}:{verb}")
+
+    # Calculate what percentage of operations are framework-heavy
+    shared_ops = ops_a & ops_b
+    framework_shared = shared_ops & framework_ops
+
+    if shared_ops:
+        framework_ratio = len(framework_shared) / len(shared_ops)
+        # If more than 60% of shared operations are framework operations, apply penalty
+        if framework_ratio > 0.6:
+            penalty += 0.3 * framework_ratio
+
+    # Additional penalty for webhook tests with different types
+    if "webhook" in test_id_a and "webhook" in test_id_b:
+        # If both are webhook tests but one is much more complex than the other
+        complexity_diff = abs(len(actions_a) - len(actions_b))
+        if complexity_diff > 2:  # Significant complexity difference
+            penalty += 0.4
+
+    # Additional penalty for tests that only share basic operations
+    if shared_ops and shared_ops.issubset(framework_ops):
+        penalty += 0.5  # Heavy penalty for only sharing framework operations
+
+    return min(penalty, 0.8)  # Cap penalty at 80%
+
+
+def calculate_cross_language_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> float:
+    """Calculate penalty for cross-language matches to reduce false positives."""
+    test_id_a = spec_a.get("test_id", "")
+    test_id_b = spec_b.get("test_id", "")
+
+    # Extract language from test_id
+    lang_a = get_language_from_test_id(test_id_a)
+    lang_b = get_language_from_test_id(test_id_b)
+
+    # No penalty if same language
+    if lang_a == lang_b:
+        return 0.0
+
+    # Cross-language match detected
+    purpose_a = spec_a.get("purpose", "")
+    purpose_b = spec_b.get("purpose", "")
+
+    # Base penalty for cross-language matches
+    penalty = 0.1  # Reduced base penalty
+
+    # Increase penalty if purposes are incompatible for cross-language matching
+    if not is_cross_language_purpose_compatible(purpose_a, purpose_b):
+        penalty += 0.2  # Reduced incompatibility penalty
+
+    # Additional penalty for very different test types
+    if is_different_test_domain(spec_a, spec_b):
+        penalty += 0.2  # Reduced domain penalty
+
+    # Reduce penalty if tests have strong operational similarity (avoid recursion)
+    # Calculate basic functional similarity without cross-language penalty
+    actions_a = spec_a.get("actions") or []
+    actions_b = spec_b.get("actions") or []
+
+    operations_a = set()
+    operations_b = set()
+
+    for action in actions_a:
+        gvk = action.get("gvk", "")
+        verb = action.get("verb", "")
+        if gvk and verb:
+            operations_a.add(f"{gvk}:{verb}")
+
+    for action in actions_b:
+        gvk = action.get("gvk", "")
+        verb = action.get("verb", "")
+        if gvk and verb:
+            operations_b.add(f"{gvk}:{verb}")
+
+    # Calculate basic operational overlap
+    shared_ops = operations_a & operations_b
+    total_ops = len(operations_a | operations_b)
+
+    if total_ops > 0:
+        operational_similarity = len(shared_ops) / total_ops
+        if operational_similarity > 0.6:  # Strong operational similarity
+            penalty *= 0.5  # Reduce penalty for truly similar tests
+
+    return min(penalty, 0.5)  # Cap penalty at 50%
+
+
+def get_language_from_test_id(test_id: str) -> str:
+    """Extract programming language from test ID."""
+    if ".go:" in test_id or "/tests/" in test_id:
+        return "go"
+    elif ".py:" in test_id or "test_" in test_id:
+        return "python"
+    return "unknown"
+
+
+def is_cross_language_purpose_compatible(purpose_a: str, purpose_b: str) -> bool:
+    """Check if two purposes are compatible for cross-language matching."""
+    # Purposes that are more suitable for cross-language comparison
+    cross_language_friendly = {
+        "RESOURCE_VALIDATION",
+        "POD_HEALTH",
+        "NETWORK_CONNECTIVITY",
+        "STORAGE_TESTING",
+        "CONFIGURATION",
+        "OPERATOR_MANAGEMENT",
+    }
+
+    # Purposes that are more language/framework specific
+    language_specific = {"WEBHOOK_TESTING", "POD_MANAGEMENT", "PTP_TESTING", "SRIOV_TESTING"}
+
+    # Same purpose is compatible
+    if purpose_a == purpose_b:
+        return purpose_a in cross_language_friendly
+
+    # Different purposes from language-specific categories are incompatible
+    if purpose_a in language_specific or purpose_b in language_specific:
+        return False
+
+    # Check general purpose compatibility
+    return is_purpose_compatible(purpose_a, purpose_b)
+
+
+def is_different_test_domain(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> bool:
+    """Check if two tests belong to significantly different domains."""
+    test_id_a = spec_a.get("test_id", "").lower()
+    test_id_b = spec_b.get("test_id", "").lower()
+
+    # Define test domains based on path patterns
+    domains_a = set()
+    domains_b = set()
+
+    domain_patterns = {
+        "network": ["network", "service", "endpoint", "ingress", "route"],
+        "autoscaling": ["autoscaling", "cluster_size", "hpa", "vpa", "scaling"],
+        "deployment": ["deployment", "deploy", "ztp", "cluster_deployment"],
+        "storage": ["storage", "pv", "pvc", "volume", "ceph"],
+        "security": ["security", "webhook", "admission", "rbac", "scc"],
+        "monitoring": ["monitor", "metrics", "prometheus", "alert"],
+    }
+
+    # Classify both tests
+    for domain, patterns in domain_patterns.items():
+        if any(pattern in test_id_a for pattern in patterns):
+            domains_a.add(domain)
+        if any(pattern in test_id_b for pattern in patterns):
+            domains_b.add(domain)
+
+    # If both tests have no clear domain, they're not from different domains
+    if not domains_a or not domains_b:
+        return False
+
+    # Check if domains overlap
+    return not bool(domains_a & domains_b)
+
+
+def calculate_context_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> float:
+    """Calculate penalty based on test file context differences."""
+    test_id_a = spec_a.get("test_id", "")
+    test_id_b = spec_b.get("test_id", "")
+
+    # Extract file paths and context
+    file_path_a = get_file_path_from_test_id(test_id_a)
+    file_path_b = get_file_path_from_test_id(test_id_b)
+
+    penalty = 0.0
+
+    # Context similarity based on file path structure
+    path_parts_a = file_path_a.split("/")
+    path_parts_b = file_path_b.split("/")
+
+    # Check if tests are from completely different modules
+    if len(path_parts_a) >= 2 and len(path_parts_b) >= 2:
+        module_a = path_parts_a[-2] if len(path_parts_a) > 1 else ""
+        module_b = path_parts_b[-2] if len(path_parts_b) > 1 else ""
+
+        # Different test modules suggest different contexts
+        if module_a != module_b:
+            # Check for related modules
+            related_modules = {
+                ("deployment", "undeploy"): 0.1,  # Related: deploy vs undeploy
+                ("cu", "du"): 0.15,  # Related: CU vs DU
+                ("network", "service"): 0.1,  # Related: network tests
+                ("storage", "pv"): 0.1,  # Related: storage tests
+                ("policies", "operator"): 0.1,  # Related: policy tests
+            }
+
+            # Check if modules are related
+            is_related = False
+            for (mod1, mod2), related_penalty in related_modules.items():
+                if (mod1 in module_a.lower() and mod2 in module_b.lower()) or (
+                    mod2 in module_a.lower() and mod1 in module_b.lower()
+                ):
+                    penalty += related_penalty
+                    is_related = True
+                    break
+
+            if not is_related:
+                penalty += 0.25  # Penalty for unrelated modules
+
+    # Check for environment context differences
+    env_a = spec_a.get("environment", [])
+    env_b = spec_b.get("environment", [])
+
+    if env_a and env_b:
+        env_overlap = set(env_a) & set(env_b)
+        if not env_overlap:
+            penalty += 0.2  # Different environments
+        elif len(env_overlap) < min(len(env_a), len(env_b)):
+            penalty += 0.1  # Partial environment overlap
+
+    # Check for test type context differences
+    test_type_a = spec_a.get("test_type", "")
+    test_type_b = spec_b.get("test_type", "")
+
+    if test_type_a != test_type_b:
+        penalty += 0.05  # Different test types
+
+    # Check dependencies context
+    deps_a = set(spec_a.get("dependencies", []))
+    deps_b = set(spec_b.get("dependencies", []))
+
+    if deps_a and deps_b:
+        deps_overlap = deps_a & deps_b
+        if not deps_overlap:
+            penalty += 0.15  # No shared dependencies
+
+    return min(penalty, 0.6)  # Cap context penalty at 60%
+
+
+def get_file_path_from_test_id(test_id: str) -> str:
+    """Extract file path from test ID."""
+    if ":" in test_id:
+        return test_id.split(":")[0]
+    return test_id
 
 
 def has_meaningful_operations(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> bool:
     """Check if two specs have meaningful operational overlap beyond just resource-level similarity."""
+    actions_a = spec_a.get("actions") or []
+    actions_b = spec_b.get("actions") or []
+
+    # CRITICAL: Both tests must have at least one operation to be considered meaningful
+    if len(actions_a) == 0 or len(actions_b) == 0:
+        return False
+
     functional_score = calculate_functional_similarity(spec_a, spec_b)
     return functional_score > 0.3  # Threshold for meaningful operations
+
+
+def is_framework_pattern_match(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> bool:
+    """Check if two specs match mainly due to testing framework patterns rather than functional similarity."""
+    test_id_a = spec_a.get("test_id", "")
+    test_id_b = spec_b.get("test_id", "")
+
+    # Framework pattern indicators
+    framework_patterns = [
+        "webhook",  # webhook testing infrastructure
+        "ginkgo_tests",  # ginkgo suite setup
+        "Test",  # basic unit test wrappers
+        "Suite",  # test suite setup
+        "e2e",  # e2e framework tests
+    ]
+
+    # Check if both test IDs contain framework patterns
+    patterns_a = [p for p in framework_patterns if p.lower() in test_id_a.lower()]
+    patterns_b = [p for p in framework_patterns if p.lower() in test_id_b.lower()]
+
+    # If both have the same framework pattern, they might be framework matches
+    if patterns_a and patterns_b and any(p in patterns_b for p in patterns_a):
+        # Additional checks for webhook-specific patterns
+        if "webhook" in patterns_a and "webhook" in patterns_b:
+            return is_webhook_framework_match(spec_a, spec_b)
+
+    return False
+
+
+def is_webhook_framework_match(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> bool:
+    """Check if two webhook tests are matching mainly due to shared framework rather than functionality."""
+    test_id_a = spec_a.get("test_id", "")
+    test_id_b = spec_b.get("test_id", "")
+
+    # Common webhook test patterns that should be differentiated
+    webhook_types = {
+        "testWebhook": "comprehensive_validation",
+        "testFailClosedWebhook": "fail_closed_testing",
+        "testAttachingPodWebhook": "pod_attachment",
+        "testMutatingWebhook": "mutation_testing",
+        "testValidatingWebhook": "validation_testing",
+    }
+
+    # Extract webhook type from test names
+    type_a = None
+    type_b = None
+
+    for pattern, webhook_type in webhook_types.items():
+        if pattern in test_id_a:
+            type_a = webhook_type
+        if pattern in test_id_b:
+            type_b = webhook_type
+
+    # If both are webhook tests but different types, it's a framework match (false positive)
+    if type_a and type_b and type_a != type_b:
+        return True
+
+    # Check operations overlap - if they share basic webhook operations but have different complexity
+    actions_a = spec_a.get("actions") or []
+    actions_b = spec_b.get("actions") or []
+
+    # If one test is much more complex than the other, likely framework match
+    if abs(len(actions_a) - len(actions_b)) > 3:  # Significant difference in complexity
+        return True
+
+    return False
 
 
 def filter_by_purpose_compatibility(
@@ -396,6 +741,20 @@ def filter_by_purpose_compatibility(
         resources_a = get_resources_from_spec(specs_a[idx_a])
         resources_b = get_resources_from_spec(specs_b[idx_b])
 
+        # CRITICAL: Both specs must have at least one action to be considered for matching
+        actions_a = specs_a[idx_a].get("actions") or []
+        actions_b = specs_b[idx_b].get("actions") or []
+        if len(actions_a) == 0 or len(actions_b) == 0:
+            continue
+
+        # CRITICAL: Exclude suite setup functions from matching (these are infrastructure, not real tests)
+        test_id_a = specs_a[idx_a].get("test_id", "")
+        test_id_b = specs_b[idx_b].get("test_id", "")
+        if ":ginkgo_tests" in test_id_a or ":ginkgo_tests" in test_id_b:
+            continue
+        if ":Test" in test_id_a or ":Test" in test_id_b:
+            continue
+
         # Check purpose compatibility
         if not is_purpose_compatible(purpose_a, purpose_b):
             continue
@@ -412,6 +771,10 @@ def filter_by_purpose_compatibility(
         if match.get("base_score", 0) > 0.7:  # High similarity threshold
             if not has_meaningful_operations(specs_a[idx_a], specs_b[idx_b]):
                 continue
+
+        # Check for framework pattern matches (false positives)
+        if is_framework_pattern_match(specs_a[idx_a], specs_b[idx_b]):
+            continue
 
         filtered.append(match)
 
@@ -437,6 +800,14 @@ def is_utility_test(spec: Dict[str, Any]) -> bool:
     test_id = spec.get("test_id", "")
     actions = spec.get("actions") or []
     expectations = spec.get("expectations") or []
+
+    # Check for suite setup/test infrastructure functions (Ginkgo test suite setup)
+    if ":ginkgo_tests" in test_id:
+        return True
+
+    # Check for unit test wrappers (not integration tests)
+    if ":Test" in test_id and ":ginkgo_tests" not in test_id:
+        return True
 
     # Check for utility test patterns in test_id
     utility_patterns = [
@@ -530,6 +901,7 @@ def is_empty_test(spec: Dict[str, Any]) -> bool:
     )
 
     # Empty if no actions, no expectations, and no other content
+    # CRITICAL: Tests with no actions are not useful for similarity matching
     return not (has_actions or has_expectations or has_other_content)
 
 
@@ -554,44 +926,120 @@ def filter_empty_tests(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def spec_to_text(spec: Dict[str, Any]) -> str:
+    """Generate structured text representation that preserves JSON semantics"""
     # Don't include test_id in the content - it's used as document ID
     parts = []
 
-    # Include test_type field to differentiate empty tests
+    # Test metadata section
     test_type = spec.get("test_type", "unknown")
     if test_type:
-        parts.append(f"test_type:{test_type}")
+        parts.append(f"TEST_TYPE: {test_type}")
 
-    # Handle None values by converting to empty lists
+    # Technology section (once, not repeated)
+    tech = spec.get("tech", [])
+    if tech:
+        parts.append(f"TECHNOLOGY: {', '.join(tech)}")
+
+    # Purpose section
+    purpose = spec.get("purpose", "")
+    if purpose:
+        parts.append(f"PURPOSE: {purpose}")
+
+    # Environment section
+    environment = spec.get("environment", [])
+    if environment:
+        parts.append(f"ENVIRONMENT: {', '.join(environment)}")
+
+    # Dependencies section
     dependencies = spec.get("dependencies") or []
-    actions = spec.get("actions") or []
-    expectations = spec.get("expectations") or []
-    externals = spec.get("externals") or []
-    openshift_specific = spec.get("openshift_specific") or []
-    concurrency = spec.get("concurrency") or []
-    artifacts = spec.get("artifacts") or []
+    if dependencies:
+        parts.append("DEPENDENCIES:")
+        for dep in dependencies:
+            parts.append(f"  - {dep}")
 
-    parts += dependencies
-    for a in actions:
-        gvk = a.get("gvk", "")
-        kind_hint = (a.get("fields") or {}).get("kind_hint", "")
-        verb = a.get("verb", "")
-        if gvk and kind_hint and "/" not in gvk:
-            gvk = f"{gvk}/{kind_hint}"
-        if gvk and verb:
-            parts.append(f"{gvk}:{verb}")
-        elif gvk:
-            parts.append(gvk)
-        elif verb:
-            parts.append(f"verb:{verb}")
-    parts += [
-        f"expect:{e.get('target','')}={e.get('condition','')}" for e in expectations
-    ]
-    parts += [f"ext:{x}" for x in externals]
-    parts += openshift_specific
-    parts += concurrency
-    parts += artifacts
-    return "\n".join(map(str, parts))
+    # Operations section with structure
+    actions = spec.get("actions") or []
+    if actions:
+        parts.append("OPERATIONS:")
+        for action in actions:
+            gvk = action.get("gvk", "")
+            kind_hint = (action.get("fields") or {}).get("kind_hint", "")
+            verb = action.get("verb", "")
+            if gvk and kind_hint and "/" not in gvk:
+                gvk = f"{gvk}/{kind_hint}"
+            if gvk and verb:
+                parts.append(f"  - {gvk}:{verb}")
+            elif gvk:
+                parts.append(f"  - {gvk}")
+            elif verb:
+                parts.append(f"  - verb:{verb}")
+
+    # Expectations section
+    expectations = spec.get("expectations") or []
+    if expectations:
+        parts.append("EXPECTATIONS:")
+        for exp in expectations:
+            target = exp.get("target", "")
+            condition = exp.get("condition", "")
+            if target and condition:
+                parts.append(f"  - {target}={condition}")
+
+    # External dependencies section
+    externals = spec.get("externals") or []
+    if externals:
+        parts.append("EXTERNAL_DEPENDENCIES:")
+        for ext in externals:
+            parts.append(f"  - {ext}")
+
+    # OpenShift specific section
+    openshift_specific = spec.get("openshift_specific") or []
+    if openshift_specific:
+        parts.append("OPENSHIFT_SPECIFIC:")
+        for openshift in openshift_specific:
+            parts.append(f"  - {openshift}")
+
+    # Concurrency section
+    concurrency = spec.get("concurrency") or []
+    if concurrency:
+        parts.append("CONCURRENCY:")
+        for conc in concurrency:
+            parts.append(f"  - {conc}")
+
+    # Artifacts section
+    artifacts = spec.get("artifacts") or []
+    if artifacts:
+        parts.append("ARTIFACTS:")
+        for artifact in artifacts:
+            parts.append(f"  - {artifact}")
+
+    # Steps section with hierarchical structure
+    by_steps = spec.get("by_steps", [])
+    if by_steps:
+        parts.append("STEPS:")
+        for step in by_steps:
+            description = step.get("description", "")
+            if description:
+                parts.append(f"  - {description}")
+
+                # Step operations
+                step_actions = step.get("actions") or []
+                if step_actions:
+                    for action in step_actions:
+                        gvk = action.get("gvk", "")
+                        verb = action.get("verb", "")
+                        if gvk and verb:
+                            parts.append(f"    - {gvk}:{verb}")
+                        elif gvk:
+                            parts.append(f"    - {gvk}")
+                        elif verb:
+                            parts.append(f"    - verb:{verb}")
+
+                # Step type
+                step_type = step.get("type", "")
+                if step_type:
+                    parts.append(f"    - type:{step_type}")
+
+    return "\n".join(parts)
 
 
 def expand_equivalents(tokens: set) -> set:
@@ -607,9 +1055,7 @@ def expand_equivalents(tokens: set) -> set:
 
 def build_embeddings(specs: List[Dict[str, Any]], model) -> np.ndarray:
     texts = [spec_to_text(s) for s in specs]
-    embs = model.encode(
-        texts, normalize_embeddings=True, show_progress_bar=True, batch_size=64
-    )
+    embs = model.encode(texts, normalize_embeddings=True, show_progress_bar=True, batch_size=64)
     return np.array(embs, dtype="float32")
 
 
@@ -691,9 +1137,7 @@ def shared_signals(a: Dict[str, Any], b: Dict[str, Any]) -> str:
     signals = []
 
     # 1. Exact operation matches (GVK:verb)
-    ta, tb = expand_equivalents(tokens_from_spec(a)), expand_equivalents(
-        tokens_from_spec(b)
-    )
+    ta, tb = expand_equivalents(tokens_from_spec(a)), expand_equivalents(tokens_from_spec(b))
     exact_matches = sorted(ta & tb)
     if exact_matches:
         signals.extend([f"exact:{match}" for match in exact_matches])
@@ -745,9 +1189,7 @@ def shared_signals(a: Dict[str, Any], b: Dict[str, Any]) -> str:
         if common_techs:
             signals.append(f"tech:{','.join(sorted(common_techs))}")
         elif is_tech_compatible(tech_a, tech_b):
-            signals.append(
-                f"tech_compatible:{','.join(sorted(tech_a))}~{','.join(sorted(tech_b))}"
-            )
+            signals.append(f"tech_compatible:{','.join(sorted(tech_a))}~{','.join(sorted(tech_b))}")
 
     return ";".join(signals)
 
@@ -783,7 +1225,14 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
             tech_b = specs_b[j].get("tech", [])
             tech_boost = 0.0
 
-            if tech_a and tech_b:
+            # ENHANCED: Technology-aware penalty for mismatches
+            if tech_a and not tech_b:
+                # Technology-specific test vs generic test - heavy penalty
+                tech_boost = -0.4
+            elif tech_b and not tech_a:
+                # Generic test vs technology-specific test - heavy penalty
+                tech_boost = -0.4
+            elif tech_a and tech_b:
                 common_techs = set(tech_a) & set(tech_b)
                 if common_techs:
                     tech_boost = 0.04 * min(
@@ -792,7 +1241,7 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
                 elif is_tech_compatible(tech_a, tech_b):
                     tech_boost = 0.02  # Tiny boost for compatible technologies
                 else:
-                    tech_boost = -0.03  # Tiny penalty for incompatible technologies
+                    tech_boost = -0.2  # Medium penalty for incompatible technologies
 
             # Functional similarity scoring
             functional_score = calculate_functional_similarity(specs_a[i], specs_b[j])
@@ -802,15 +1251,9 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
 
             if shared:
                 # Count different types of shared signals
-                exact_count = len(
-                    [s for s in shared.split(";") if s.startswith("exact:")]
-                )
-                resource_count = len(
-                    [s for s in shared.split(";") if s.startswith("resource:")]
-                )
-                category_count = len(
-                    [s for s in shared.split(";") if s.startswith("category:")]
-                )
+                exact_count = len([s for s in shared.split(";") if s.startswith("exact:")])
+                resource_count = len([s for s in shared.split(";") if s.startswith("resource:")])
+                category_count = len([s for s in shared.split(";") if s.startswith("category:")])
                 verb_group_count = len(
                     [s for s in shared.split(";") if s.startswith("verb_group:")]
                 )
@@ -836,17 +1279,35 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
 
                 boosted_score = min(
                     1.0,
-                    float(sc)
-                    + signal_boost
-                    + purpose_boost
-                    + tech_boost
-                    + functional_boost,
+                    float(sc) + signal_boost + purpose_boost + tech_boost + functional_boost,
                 )
             else:
                 boosted_score = min(
                     1.0,
                     max(0.0, float(sc) + purpose_boost + tech_boost + functional_boost),
                 )
+
+            # Apply cross-language threshold filtering
+            test_id_a = specs_a[i]["test_id"]
+            test_id_b = specs_b[j]["test_id"]
+            lang_a = get_language_from_test_id(test_id_a)
+            lang_b = get_language_from_test_id(test_id_b)
+
+            # Apply context-aware filtering
+            context_penalty = calculate_context_penalty(specs_a[i], specs_b[j])
+            final_score = boosted_score * (1.0 - context_penalty)
+
+            # Apply higher threshold for cross-language matches
+            if lang_a != lang_b:
+                # Cross-language matches need higher similarity to be included
+                cross_lang_threshold = (
+                    0.5  # Reduced threshold to allow meaningful cross-language matches
+                )
+                if final_score < cross_lang_threshold:
+                    continue  # Skip low-scoring cross-language matches
+
+            # Update the final blended score with context penalty
+            boosted_score = final_score
 
             pairs.append(
                 {
@@ -922,9 +1383,7 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
                 tech_compatible_matches.append(p)
 
         # Check functional similarity
-        functional_score = calculate_functional_similarity(
-            specs_a[idx_a], specs_b[idx_b]
-        )
+        functional_score = calculate_functional_similarity(specs_a[idx_a], specs_b[idx_b])
         if functional_score > 0.3:  # Threshold for meaningful functional similarity
             functional_matches.append(p)
 
@@ -948,9 +1407,7 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
             * 100
         )
         tech_rate = (
-            (len(tech_same_matches) + len(tech_compatible_matches))
-            / len(high_sim_matches)
-            * 100
+            (len(tech_same_matches) + len(tech_compatible_matches)) / len(high_sim_matches) * 100
         )
         functional_rate = len(functional_matches) / len(high_sim_matches) * 100
         print(f"Operation validation rate: {validation_rate:.1f}%")
@@ -964,9 +1421,7 @@ def validate_high_similarity_matches(pairs, specs_a, specs_b, threshold=0.8):
             )
             print("   These may be false positives based on text similarity alone.")
         else:
-            print(
-                "✅ Good validation rate - most high-similarity matches have shared operations!"
-            )
+            print("✅ Good validation rate - most high-similarity matches have shared operations!")
 
     return shared_ops_matches
 
@@ -1056,9 +1511,7 @@ def main():
     ap.add_argument("--py", required=True, help="JSONL from Python extractor")
     ap.add_argument("--out", default="report.csv")
     ap.add_argument("--cov", default="coverage_matrix.csv")
-    ap.add_argument(
-        "--llm", action="store_true", help="use LLM re-ranking (env vars required)"
-    )
+    ap.add_argument("--llm", action="store_true", help="use LLM re-ranking (env vars required)")
     args = ap.parse_args()
 
     # Load and combine all specs regardless of language
@@ -1109,9 +1562,7 @@ def main():
 
     # Apply purpose-based filtering to reduce false positives
     print(f"Before purpose filtering: {len(filtered_pairs)} matches")
-    filtered_pairs = filter_by_purpose_compatibility(
-        filtered_pairs, all_specs, all_specs
-    )
+    filtered_pairs = filter_by_purpose_compatibility(filtered_pairs, all_specs, all_specs)
     print(f"After purpose filtering: {len(filtered_pairs)} matches")
 
     if args.llm:

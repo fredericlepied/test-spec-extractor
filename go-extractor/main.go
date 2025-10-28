@@ -23,6 +23,13 @@ type Action struct {
 	Fields    map[string]interface{} `json:"fields,omitempty"`
 	Condition string                 `json:"condition,omitempty"`
 	Count     int                    `json:"count,omitempty"`
+	ByStep    string                 `json:"by_step,omitempty"` // Track which By(...) step this action belongs to
+}
+
+type ByStep struct {
+	Description string   `json:"description"`
+	Actions     []Action `json:"actions"`
+	Line        int      `json:"line,omitempty"`
 }
 
 type KubeSpec struct {
@@ -36,7 +43,8 @@ type KubeSpec struct {
 	Concurrency       []string            `json:"concurrency"`
 	Artifacts         []string            `json:"artifacts"`
 	Purpose           string              `json:"purpose"`
-	Tech              []string            `json:"tech"` // SR-IOV, PTP, DPDK, GPU, Virtualization, Storage, etc.
+	Tech              []string            `json:"tech"`               // SR-IOV, PTP, DPDK, GPU, Virtualization, Storage, etc.
+	BySteps           []ByStep            `json:"by_steps,omitempty"` // Track operations in By(...) steps
 }
 
 // MarshalJSON ensures that nil slices are marshaled as empty arrays instead of null
@@ -68,6 +76,9 @@ func (ks KubeSpec) MarshalJSON() ([]byte, error) {
 	}
 	if ks.Tech == nil {
 		ks.Tech = []string{}
+	}
+	if ks.BySteps == nil {
+		ks.BySteps = []ByStep{}
 	}
 
 	return json.Marshal((Alias)(ks))
@@ -227,6 +238,8 @@ var (
 	purposePatterns = map[string][]string{
 		// Upgrade testing patterns - check first for specificity
 		"UPGRADE_TESTING": {"upgrade", "upgrading", "upgraded", "version.*upgrade", "operator.*upgrade", "subscription.*upgrade", "csv.*upgrade", "upgrade.*successfully", "upgrade.*target", "upgrade.*version", "await.*upgrade", "upgrade.*await", "upgrade.*test", "upgrade.*suite"},
+		// Webhook testing patterns - check first for specificity
+		"WEBHOOK_TESTING": {"webhook", "validating.*webhook", "mutating.*webhook", "admission.*controller", "admission.*webhook", "webhook.*configuration", "webhook.*registration", "webhook.*validation", "webhook.*mutation", "fail.*closed", "webhook.*timeout", "webhook.*denied", "webhook.*reject"},
 		// IP Stack patterns - check first for specificity
 		"DUAL_STACK_TESTING": {"dual", "stack", "dualstack", "ipv4.*ipv6", "ipv6.*ipv4", "both.*ip", "ipv4.*and.*ipv6", "ipv6.*and.*ipv4", "dualstack.*ipv4", "dualstack.*ipv6"},
 		"IPV4_ONLY_TESTING":  {"ipv4.*only", "single.*stack.*ipv4", "ipv4.*single", "no.*ipv6", "ipv4.*no.*ipv6", "ipv4.*first", "ipv4.*preferred", "ipv4.*primary"},
@@ -234,6 +247,10 @@ var (
 		// Networking technology patterns
 		"SRIOV_TESTING": {"sriov", "sr-iov", "single", "root", "iov", "vf", "pf", "virtual", "function", "networkattachment"},
 		"PTP_TESTING":   {"ptp", "precision", "time", "sync", "clock", "timing", "ptpoperator"},
+		// Domain-specific purpose patterns - check before general patterns
+		"NETWORK_SERVICE_TESTING": {"service.*endpoint", "endpoint.*pod", "endpoint.*unready", "endpoint.*ready", "service.*connectivity", "loadbalancer.*service", "nodeport.*service", "clusterip.*service", "service.*discovery", "service.*selector"},
+		"CLUSTER_AUTOSCALING":     {"cluster.*size.*autoscaling", "autoscaling.*scale.*up", "autoscaling.*scale.*down", "node.*autoscaler", "cluster.*autoscaler", "autoscaling.*mig", "managed.*instance.*group", "cluster.*size", "scale.*node", "add.*node"},
+		"ZTP_DEPLOYMENT":          {"ztp", "zero.*touch", "cluster.*deployment", "cluster.*provisioning", "site.*config", "managed.*cluster", "cluster.*install", "agent.*cluster", "hive.*deployment"},
 		// General purpose patterns
 		"NETWORK_CONNECTIVITY": {"curl", "url", "frr", "routing", "connectivity", "reach", "ping", "network", "traffic"},
 		"POD_HEALTH":           {"pods", "status", "running", "phase", "health", "ready", "condition", "state"},
@@ -1119,6 +1136,440 @@ func astToString(node ast.Node) string {
 	}
 }
 
+// extractByStepDescription extracts the description from a By(...) call
+func extractByStepDescription(call *ast.CallExpr) string {
+	if len(call.Args) == 0 {
+		return ""
+	}
+
+	// Get the first argument (the description)
+	arg := call.Args[0]
+	return astToString(arg)
+}
+
+// isByCall checks if a call expression is a By(...) call
+func isByCall(call *ast.CallExpr) bool {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "By"
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		return ident.Name == "By"
+	}
+	return false
+}
+
+// findOperationsAfterBy finds all operations that occur after a By(...) call
+func findOperationsAfterBy(byCall *ast.CallExpr, fset *token.FileSet, parentNode ast.Node) []Action {
+	var operations []Action
+
+	// For By(...) calls, we need to look at the function passed as the second argument
+	// By("description", func() { ... })
+	if len(byCall.Args) >= 2 {
+		if funcLit, ok := byCall.Args[1].(*ast.FuncLit); ok {
+			// Analyze the function body for operations
+			operations = analyzeStatementForOperations(funcLit.Body, fset)
+		}
+	}
+
+	return operations
+}
+
+// analyzeStatementForOperations analyzes a statement for Kubernetes operations
+func analyzeStatementForOperations(stmt ast.Stmt, fset *token.FileSet) []Action {
+	var operations []Action
+
+	// Handle BlockStmt (function bodies) by analyzing each statement
+	if block, ok := stmt.(*ast.BlockStmt); ok {
+		for _, s := range block.List {
+			stmtOps := analyzeStatementForOperations(s, fset)
+			operations = append(operations, stmtOps...)
+		}
+		return operations
+	}
+
+	ast.Inspect(stmt, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			// Check for eco-goinfra patterns
+			if gvk, verb := detectEcoGoinfraPattern(x); gvk != "" || verb != "" {
+				action := Action{}
+				if gvk != "" {
+					action.GVK = gvk
+				}
+				if verb != "" {
+					action.Verb = strings.ToLower(verb)
+				}
+				operations = append(operations, action)
+			}
+
+			// Check for helper function patterns
+			if gvk, verb := detectHelperFunctionPattern(x); gvk != "" || verb != "" {
+				action := Action{}
+				if gvk != "" {
+					action.GVK = gvk
+				}
+				if verb != "" {
+					action.Verb = strings.ToLower(verb)
+				}
+				operations = append(operations, action)
+			}
+
+			// Check for standard Kubernetes API calls
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+				if verbSet[sel.Sel.Name] {
+					operations = append(operations, Action{Verb: strings.ToLower(sel.Sel.Name)})
+				}
+			}
+
+			// Check for external commands and map to API operations
+			if exts := detectExternals(x); len(exts) > 0 {
+				for _, ext := range exts {
+					if gvk, verb := mapCommandToAPI(ext); gvk != "" && verb != "" {
+						operations = append(operations, Action{GVK: gvk, Verb: strings.ToLower(verb)})
+					}
+				}
+			}
+
+		case *ast.CompositeLit:
+			// Check for Kubernetes composite literals
+			if gvk, osh := kindFromCompositeLit(x); gvk != "" {
+				action := Action{GVK: gvk}
+				if osh != "" {
+					action.GVK = osh // Use OpenShift-specific GVK if available
+				}
+				operations = append(operations, action)
+			}
+
+			// Check for Kubernetes API types in composite literals
+			if gvk := detectK8sTypePattern(x); gvk != "" {
+				operations = append(operations, Action{GVK: gvk})
+			}
+		}
+		return true
+	})
+
+	return operations
+}
+
+// analyzeBySteps analyzes a file to find By(...) calls and their associated operations
+func analyzeBySteps(f *ast.File, fset *token.FileSet) []ByStep {
+	var bySteps []ByStep
+
+	ast.Inspect(f, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && isByCall(call) {
+			description := extractByStepDescription(call)
+			line := fset.Position(call.Pos()).Line
+
+			// Find operations that occur after this By call
+			operations := findOperationsAfterBy(call, fset, f)
+
+			// Add By step information to each action
+			for i := range operations {
+				operations[i].ByStep = description
+			}
+
+			byStep := ByStep{
+				Description: description,
+				Actions:     operations,
+				Line:        line,
+			}
+			bySteps = append(bySteps, byStep)
+		}
+		return true
+	})
+
+	return bySteps
+}
+
+// extractItBlocks extracts individual It(...) blocks from a Ginkgo test file
+func extractItBlocks(f *ast.File, fset *token.FileSet, filePath, rootPath string) []KubeSpec {
+	var specs []KubeSpec
+
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		// Check if this is an It(...) call
+		if isItCall(call) {
+			description := extractItDescription(call)
+			operations := findOperationsInIt(call, fset, n)
+			expectations := findExpectationsInIt(call, fset, n)
+
+			// Create a unique test ID for this It block
+			basename := filepath.Base(rootPath)
+			relativePath := strings.TrimPrefix(strings.TrimPrefix(filePath, rootPath), "/")
+			testID := fmt.Sprintf("%s/%s:It_%s", basename, relativePath, sanitizeTestName(description))
+
+			spec := KubeSpec{
+				TestID:            testID,
+				TestType:          "integration",
+				Dependencies:      []string{},
+				Environment:       []string{},
+				Actions:           operations,
+				Expectations:      expectations,
+				OpenShiftSpecific: []string{},
+				Concurrency:       []string{},
+				Artifacts:         []string{},
+				Tech:              []string{},
+				BySteps:           []ByStep{},
+			}
+
+			// Analyze the It block for additional patterns
+			analyzeItBlock(call, &spec, fset)
+
+			specs = append(specs, spec)
+		}
+
+		return true
+	})
+
+	return specs
+}
+
+// isItCall checks if a call expression is an It(...) call
+func isItCall(call *ast.CallExpr) bool {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "It" || sel.Sel.Name == "FIt" || sel.Sel.Name == "PIt" || sel.Sel.Name == "XIt"
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		return ident.Name == "It" || ident.Name == "FIt" || ident.Name == "PIt" || ident.Name == "XIt"
+	}
+	return false
+}
+
+// extractItDescription extracts the description string from an It(...) call
+func extractItDescription(call *ast.CallExpr) string {
+	if len(call.Args) == 0 {
+		return "unnamed_test"
+	}
+
+	// The first argument should be the description string
+	if bl, ok := call.Args[0].(*ast.BasicLit); ok && bl.Kind == token.STRING {
+		// Remove quotes and clean up the string
+		desc := strings.Trim(bl.Value, "\"`")
+		// Replace spaces with underscores for test ID
+		return strings.ReplaceAll(desc, " ", "_")
+	}
+
+	return "unnamed_test"
+}
+
+// findOperationsInIt finds Kubernetes operations within an It(...) block
+func findOperationsInIt(itCall *ast.CallExpr, fset *token.FileSet, parentNode ast.Node) []Action {
+	var operations []Action
+
+	// The It(...) call should have a function literal as the second argument
+	if len(itCall.Args) < 2 {
+		return operations
+	}
+
+	funcLit, ok := itCall.Args[1].(*ast.FuncLit)
+	if !ok {
+		return operations
+	}
+
+	// Analyze the function body for operations
+	ast.Inspect(funcLit.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			// Check for eco-goinfra patterns
+			if gvk, verb := detectEcoGoinfraPattern(x); gvk != "" || verb != "" {
+				action := Action{}
+				if gvk != "" {
+					action.GVK = gvk
+				}
+				if verb != "" {
+					action.Verb = verb
+				}
+				operations = append(operations, action)
+			}
+
+			// Check for standard Kubernetes API calls
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+				if verbSet[sel.Sel.Name] {
+					action := Action{Verb: sel.Sel.Name}
+					operations = append(operations, action)
+				}
+			}
+
+			// Check for external commands and map to API operations
+			if exts := detectExternals(x); len(exts) > 0 {
+				for _, ext := range exts {
+					if gvk, verb := mapCommandToAPI(ext); gvk != "" || verb != "" {
+						action := Action{}
+						if gvk != "" {
+							action.GVK = gvk
+						}
+						if verb != "" {
+							action.Verb = verb
+						}
+						operations = append(operations, action)
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	return operations
+}
+
+// findExpectationsInIt finds expectations/assertions within an It(...) block
+func findExpectationsInIt(itCall *ast.CallExpr, fset *token.FileSet, parentNode ast.Node) []map[string]string {
+	var expectations []map[string]string
+
+	// The It(...) call should have a function literal as the second argument
+	if len(itCall.Args) < 2 {
+		return expectations
+	}
+
+	funcLit, ok := itCall.Args[1].(*ast.FuncLit)
+	if !ok {
+		return expectations
+	}
+
+	// Analyze the function body for expectations
+	ast.Inspect(funcLit.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			if exps := detectExpectations(x); len(exps) > 0 {
+				expectations = append(expectations, exps...)
+			}
+		}
+		return true
+	})
+
+	return expectations
+}
+
+// analyzeItBlock performs additional analysis on an It block
+func analyzeItBlock(itCall *ast.CallExpr, spec *KubeSpec, fset *token.FileSet) {
+	// The It(...) call should have a function literal as the second argument
+	if len(itCall.Args) < 2 {
+		return
+	}
+
+	funcLit, ok := itCall.Args[1].(*ast.FuncLit)
+	if !ok {
+		return
+	}
+
+	openshiftSet := map[string]bool{}
+	verbs := map[string]bool{}
+	gvkSet := map[string]bool{}
+
+	// Analyze the function body for patterns
+	ast.Inspect(funcLit.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			// Check for eco-goinfra patterns
+			if gvk, verb := detectEcoGoinfraPattern(x); gvk != "" || verb != "" {
+				if gvk != "" {
+					gvkSet[gvk] = true
+					if strings.Contains(gvk, "openshift") || strings.Contains(gvk, "route.openshift.io") {
+						openshiftSet[gvk] = true
+					}
+				}
+				if verb != "" {
+					verbs[verb] = true
+				}
+			}
+
+			// Check for standard Kubernetes API calls
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+				if verbSet[sel.Sel.Name] {
+					verbs[sel.Sel.Name] = true
+				}
+			}
+
+			// Check for external commands and map to API operations
+			if exts := detectExternals(x); len(exts) > 0 {
+				for _, ext := range exts {
+					if gvk, verb := mapCommandToAPI(ext); gvk != "" || verb != "" {
+						gvkSet[gvk] = true
+						verbs[verb] = true
+						if strings.Contains(gvk, "openshift") || strings.Contains(gvk, "route.openshift.io") {
+							openshiftSet[gvk] = true
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	// Update spec with discovered patterns
+	for gvk := range gvkSet {
+		spec.Actions = append(spec.Actions, Action{GVK: gvk})
+	}
+	for verb := range verbs {
+		// Add verb to existing actions or create new ones
+		for i := range spec.Actions {
+			if spec.Actions[i].Verb == "" {
+				spec.Actions[i].Verb = verb
+			}
+		}
+	}
+	for openshift := range openshiftSet {
+		spec.OpenShiftSpecific = append(spec.OpenShiftSpecific, openshift)
+	}
+
+	// Detect purpose from the It description and content
+	spec.Purpose = detectPurposeFromIt(spec.TestID, funcLit)
+}
+
+// detectPurposeFromIt detects the purpose of an It block based on its description and content
+func detectPurposeFromIt(testID string, funcLit *ast.FuncLit) string {
+	// Extract purpose from test ID (contains the It description)
+	testIDLower := strings.ToLower(testID)
+
+	// Check for specific purpose patterns
+	for purpose, patterns := range purposePatterns {
+		for _, pattern := range patterns {
+			if strings.Contains(testIDLower, pattern) {
+				return purpose
+			}
+		}
+	}
+
+	// If no specific purpose found, analyze the function content
+	content := astToString(funcLit)
+	contentLower := strings.ToLower(content)
+
+	for purpose, patterns := range purposePatterns {
+		for _, pattern := range patterns {
+			if strings.Contains(contentLower, pattern) {
+				return purpose
+			}
+		}
+	}
+
+	return "UNKNOWN"
+}
+
+// sanitizeTestName creates a safe test name for the test ID
+func sanitizeTestName(description string) string {
+	// Remove special characters and replace with underscores
+	re := regexp.MustCompile(`[^a-zA-Z0-9_]`)
+	sanitized := re.ReplaceAllString(description, "_")
+
+	// Remove multiple consecutive underscores
+	re = regexp.MustCompile(`_+`)
+	sanitized = re.ReplaceAllString(sanitized, "_")
+
+	// Remove leading/trailing underscores
+	sanitized = strings.Trim(sanitized, "_")
+
+	// Ensure it's not empty
+	if sanitized == "" {
+		return "unnamed_test"
+	}
+
+	return sanitized
+}
+
 func detectExternals(call *ast.CallExpr) []string {
 	var externals []string
 
@@ -1310,8 +1761,23 @@ func main() {
 			return true
 		})
 
-		// If file has Ginkgo patterns, create a consolidated spec
+		// If file has Ginkgo patterns, check for individual It blocks first
 		if hasGinkgoPatterns {
+			// Try to extract individual It blocks
+			itSpecs := extractItBlocks(f, fset, path, *root)
+			if len(itSpecs) > 0 {
+				// We found individual It blocks, output them instead of consolidated spec
+				for i := range itSpecs {
+					itSpecs[i].Artifacts = append(itSpecs[i].Artifacts, fileGolden...)
+					comments := []string{} // TODO: Extract comments from AST
+					itSpecs[i].Purpose = detectPurpose(itSpecs[i].TestID, comments, itSpecs[i].Actions, itSpecs[i].Expectations)
+					itSpecs[i].Tech = detectNetworkingTech(itSpecs[i].TestID, path, comments)
+					b, _ := json.Marshal(itSpecs[i])
+					fmt.Fprintln(out, string(b))
+				}
+				return nil // Skip the consolidated spec creation
+			}
+			// Fall through to consolidated spec if no individual It blocks found
 			spec := KubeSpec{
 				TestType:          "integration",
 				Dependencies:      []string{},
@@ -1474,8 +1940,12 @@ func main() {
 				spec.Dependencies = append(spec.Dependencies, k)
 			}
 
+			// Analyze By steps for more granular operation tracking
+			bySteps := analyzeBySteps(f, fset)
+			spec.BySteps = bySteps
+
 			// Only output if we found meaningful patterns
-			if len(spec.Actions) > 0 || len(spec.OpenShiftSpecific) > 0 || len(spec.Dependencies) > 0 {
+			if len(spec.Actions) > 0 || len(spec.OpenShiftSpecific) > 0 || len(spec.Dependencies) > 0 || len(spec.BySteps) > 0 {
 				// Detect purpose based on test content
 				comments := []string{} // TODO: Extract comments from AST
 				spec.Purpose = detectPurpose(spec.TestID, comments, spec.Actions, spec.Expectations)

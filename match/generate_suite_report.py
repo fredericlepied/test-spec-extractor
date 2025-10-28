@@ -51,9 +51,7 @@ def generate_executive_summary(analysis):
 
     # Test complexity assessment
     complexity_level = (
-        "High"
-        if avg_ops_per_test > 3
-        else "Medium" if avg_ops_per_test > 1.5 else "Low"
+        "High" if avg_ops_per_test > 3 else "Medium" if avg_ops_per_test > 1.5 else "Low"
     )
 
     # Coverage diversity
@@ -61,17 +59,11 @@ def generate_executive_summary(analysis):
     environment_diversity = len(environments)
 
     # Most common test type
-    most_common_type = (
-        max(test_types.items(), key=lambda x: x[1]) if test_types else ("Unknown", 0)
-    )
-    most_common_purpose = (
-        max(purposes.items(), key=lambda x: x[1]) if purposes else ("Unknown", 0)
-    )
+    most_common_type = max(test_types.items(), key=lambda x: x[1]) if test_types else ("Unknown", 0)
+    most_common_purpose = max(purposes.items(), key=lambda x: x[1]) if purposes else ("Unknown", 0)
 
     # Test distribution health
-    integration_ratio = (
-        test_types.get("integration", 0) / total_tests if total_tests > 0 else 0
-    )
+    integration_ratio = test_types.get("integration", 0) / total_tests if total_tests > 0 else 0
     test_health = (
         "Excellent"
         if integration_ratio > 0.7
@@ -108,9 +100,7 @@ def generate_executive_summary(analysis):
         summary.append(f"**Test Type Distribution:**")
         for test_type, count in test_types.items():
             percentage = format_percentage(count, total_tests)
-            summary.append(
-                f"- {test_type.title()}: {format_number(count)} ({percentage})"
-            )
+            summary.append(f"- {test_type.title()}: {format_number(count)} ({percentage})")
         summary.append("")
 
     # Purpose distribution
@@ -129,9 +119,7 @@ def generate_executive_summary(analysis):
     if environments:
         summary.append(f"**Target Environments:**")
         for env, count in environments.items():
-            summary.append(
-                f"- {env.replace('_', ' ').title()}: {format_number(count)} tests"
-            )
+            summary.append(f"- {env.replace('_', ' ').title()}: {format_number(count)} tests")
         summary.append("")
 
     return "\n".join(summary)
@@ -148,9 +136,7 @@ def generate_coverage_analysis(analysis):
     if resources:
         coverage.append("**Most Tested Resources:**")
         # Sort by count and take top 10
-        sorted_resources = sorted(resources.items(), key=lambda x: x[1], reverse=True)[
-            :10
-        ]
+        sorted_resources = sorted(resources.items(), key=lambda x: x[1], reverse=True)[:10]
         for resource, count in sorted_resources:
             coverage.append(f"- `{resource}`: {format_number(count)} operations")
         coverage.append("")
@@ -160,9 +146,7 @@ def generate_coverage_analysis(analysis):
     if operations:
         coverage.append("**Most Common Operations:**")
         # Sort by count and take top 10
-        sorted_operations = sorted(
-            operations.items(), key=lambda x: x[1], reverse=True
-        )[:10]
+        sorted_operations = sorted(operations.items(), key=lambda x: x[1], reverse=True)[:10]
         for operation, count in sorted_operations:
             coverage.append(f"- `{operation}`: {format_number(count)} tests")
         coverage.append("")
@@ -182,9 +166,7 @@ def generate_coverage_analysis(analysis):
     if openshift_resources:
         coverage.append("**OpenShift-Specific Resources:**")
         # Sort by count
-        sorted_openshift = sorted(
-            openshift_resources.items(), key=lambda x: x[1], reverse=True
-        )
+        sorted_openshift = sorted(openshift_resources.items(), key=lambda x: x[1], reverse=True)
         for resource, count in sorted_openshift:
             coverage.append(f"- `{resource}`: {format_number(count)} operations")
         coverage.append("")
@@ -240,10 +222,7 @@ def generate_quality_metrics(analysis):
     complexity_score = min(100, max(0, (avg_ops_per_test - 0.5) * 30))
     coverage_score = min(
         100,
-        (
-            coverage_metrics["unique_resources"] * 2
-            + coverage_metrics["unique_operations"] * 0.5
-        ),
+        (coverage_metrics["unique_resources"] * 2 + coverage_metrics["unique_operations"] * 0.5),
     )
 
     overall_score = (diversity_score + complexity_score + coverage_score) / 3
@@ -257,23 +236,17 @@ def generate_quality_metrics(analysis):
         )
     )
 
-    metrics.append(
-        f"**Overall Quality Score: {quality_grade} ({overall_score:.1f}/100)**"
-    )
+    metrics.append(f"**Overall Quality Score: {quality_grade} ({overall_score:.1f}/100)**")
     metrics.append("")
 
     metrics.append(f"**Test Diversity Score: {diversity_score:.1f}/100**")
     metrics.append(f"- Test Type Diversity: {test_diversity} different types")
     metrics.append(f"- Purpose Diversity: {purpose_diversity} different purposes")
-    metrics.append(
-        f"- Environment Diversity: {environment_diversity} different environments"
-    )
+    metrics.append(f"- Environment Diversity: {environment_diversity} different environments")
     metrics.append("")
 
     metrics.append(f"**Coverage Score: {coverage_score:.1f}/100**")
-    metrics.append(
-        f"- Resource Coverage: {coverage_metrics['unique_resources']} resource types"
-    )
+    metrics.append(f"- Resource Coverage: {coverage_metrics['unique_resources']} resource types")
     metrics.append(
         f"- Operation Coverage: {coverage_metrics['unique_operations']} unique operations"
     )
@@ -286,9 +259,7 @@ def generate_quality_metrics(analysis):
         complexity_note = "✅ Good: Tests are comprehensive and thorough"
     elif avg_ops_per_test > 1.5:
         complexity = "Medium (1.5-3 operations per test)"
-        complexity_note = (
-            "⚠️ Consider: Some tests might benefit from more comprehensive coverage"
-        )
+        complexity_note = "⚠️ Consider: Some tests might benefit from more comprehensive coverage"
     else:
         complexity = "Low (1-1.5 operations per test)"
         complexity_note = "❌ Attention: Tests may be too simple and miss edge cases"
@@ -315,14 +286,10 @@ def generate_quality_metrics(analysis):
     purposes = analysis.get("test_distribution", {}).get("by_purpose", {})
     if purposes:
         purpose_balance = (
-            len([p for p in purposes.values() if p > 0]) / len(purposes)
-            if purposes
-            else 0
+            len([p for p in purposes.values() if p > 0]) / len(purposes) if purposes else 0
         )
         metrics.append(f"**Test Effectiveness:**")
-        metrics.append(
-            f"- Purpose Balance: {purpose_balance:.1%} of purpose categories have tests"
-        )
+        metrics.append(f"- Purpose Balance: {purpose_balance:.1%} of purpose categories have tests")
         if purpose_balance < 0.5:
             metrics.append(f"  - ⚠️ Consider: Many purpose categories are under-tested")
         else:
@@ -548,9 +515,7 @@ def generate_validation_questions(analysis):
     questions = []
     questions.append("## ❓ Validation Questions")
     questions.append("")
-    questions.append(
-        "Please review the following questions to validate the analysis accuracy:"
-    )
+    questions.append("Please review the following questions to validate the analysis accuracy:")
     questions.append("")
 
     # Test type validation
@@ -602,9 +567,7 @@ def generate_validation_questions(analysis):
     if operations:
         questions.append("**Operation Coverage:**")
         # Sort by count and take top 5
-        top_operations = sorted(operations.items(), key=lambda x: x[1], reverse=True)[
-            :5
-        ]
+        top_operations = sorted(operations.items(), key=lambda x: x[1], reverse=True)[:5]
         for operation, count in top_operations:
             questions.append(
                 f"- Are tests correctly performing `{operation}` operations ({format_number(count)} times)?"
@@ -674,9 +637,7 @@ def generate_suite_report(analysis_file, output_file=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate high-level test suite report"
-    )
+    parser = argparse.ArgumentParser(description="Generate high-level test suite report")
     parser.add_argument("analysis_file", help="Path to analysis JSON file")
     parser.add_argument("-o", "--output", help="Output file path (default: stdout)")
     parser.add_argument(
