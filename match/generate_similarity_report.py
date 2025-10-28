@@ -536,25 +536,37 @@ def generate_top_matches(test_report, go_specs, py_specs, top_n=20):
     top.append(f"**Top {top_n} Most Similar Test Pairs:**")
     top.append("")
 
+    go_specs_count = len(go_specs)
+
     for i, (_, row) in enumerate(top_matches.iterrows(), 1):
-        go_idx = int(row["idx_a"])
-        py_idx = int(row["idx_b"])
+        idx_a = int(row["idx_a"])
+        idx_b = int(row["idx_b"])
 
-        go_test_name = "Unknown"
-        py_test_name = "Unknown"
+        # Use the same index mapping logic as the rest of the code
+        if idx_a < go_specs_count:
+            test_a = go_specs[idx_a]
+            test_a_lang = "go"
+        else:
+            test_a = py_specs[idx_a - go_specs_count]
+            test_a_lang = "py"
 
-        if go_idx < len(go_specs):
-            go_test_name = go_specs[go_idx]["test_id"]
-        if py_idx < len(py_specs):
-            py_test_name = py_specs[py_idx]["test_id"]
+        if idx_b < go_specs_count:
+            test_b = go_specs[idx_b]
+            test_b_lang = "go"
+        else:
+            test_b = py_specs[idx_b - go_specs_count]
+            test_b_lang = "py"
+
+        test_a_name = test_a["test_id"]
+        test_b_name = test_b["test_id"]
 
         # Determine language labels based on actual match type
-        a_lang = row.get("a_language", "Go").title()
-        b_lang = row.get("b_language", "Python").title()
+        a_lang = test_a_lang.title()
+        b_lang = test_b_lang.title()
 
         top.append(f"**{i}. Score: {row['blended_score']:.3f}**")
-        top.append(f"- **{a_lang}**: `{go_test_name}`")
-        top.append(f"- **{b_lang}**: `{py_test_name}`")
+        top.append(f"- **{a_lang}**: `{test_a_name}`")
+        top.append(f"- **{b_lang}**: `{test_b_name}`")
         top.append(f"- **Shared Signals**: {row['shared_signals']}")
         top.append("")
 
@@ -715,10 +727,10 @@ def main():
     signal_analysis = analyze_shared_signals(test_report)
 
     print("Identifying potential duplicates...")
-    duplicates = identify_potential_duplicates(test_report, all_specs, all_specs)
+    duplicates = identify_potential_duplicates(test_report, go_specs, py_specs)
 
     print("Identifying complementary tests...")
-    complementary = identify_complementary_tests(test_report, all_specs, all_specs)
+    complementary = identify_complementary_tests(test_report, go_specs, py_specs)
 
     print("Generating comprehensive report...")
 

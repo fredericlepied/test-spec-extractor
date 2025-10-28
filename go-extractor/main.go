@@ -238,6 +238,8 @@ var (
 	purposePatterns = map[string][]string{
 		// Upgrade testing patterns - check first for specificity
 		"UPGRADE_TESTING": {"upgrade", "upgrading", "upgraded", "version.*upgrade", "operator.*upgrade", "subscription.*upgrade", "csv.*upgrade", "upgrade.*successfully", "upgrade.*target", "upgrade.*version", "await.*upgrade", "upgrade.*await", "upgrade.*test", "upgrade.*suite"},
+		// Webhook testing patterns - check first for specificity
+		"WEBHOOK_TESTING": {"webhook", "validating.*webhook", "mutating.*webhook", "admission.*controller", "admission.*webhook", "webhook.*configuration", "webhook.*registration", "webhook.*validation", "webhook.*mutation", "fail.*closed", "webhook.*timeout", "webhook.*denied", "webhook.*reject"},
 		// IP Stack patterns - check first for specificity
 		"DUAL_STACK_TESTING": {"dual", "stack", "dualstack", "ipv4.*ipv6", "ipv6.*ipv4", "both.*ip", "ipv4.*and.*ipv6", "ipv6.*and.*ipv4", "dualstack.*ipv4", "dualstack.*ipv6"},
 		"IPV4_ONLY_TESTING":  {"ipv4.*only", "single.*stack.*ipv4", "ipv4.*single", "no.*ipv6", "ipv4.*no.*ipv6", "ipv4.*first", "ipv4.*preferred", "ipv4.*primary"},
@@ -245,6 +247,10 @@ var (
 		// Networking technology patterns
 		"SRIOV_TESTING": {"sriov", "sr-iov", "single", "root", "iov", "vf", "pf", "virtual", "function", "networkattachment"},
 		"PTP_TESTING":   {"ptp", "precision", "time", "sync", "clock", "timing", "ptpoperator"},
+		// Domain-specific purpose patterns - check before general patterns
+		"NETWORK_SERVICE_TESTING": {"service.*endpoint", "endpoint.*pod", "endpoint.*unready", "endpoint.*ready", "service.*connectivity", "loadbalancer.*service", "nodeport.*service", "clusterip.*service", "service.*discovery", "service.*selector"},
+		"CLUSTER_AUTOSCALING":     {"cluster.*size.*autoscaling", "autoscaling.*scale.*up", "autoscaling.*scale.*down", "node.*autoscaler", "cluster.*autoscaler", "autoscaling.*mig", "managed.*instance.*group", "cluster.*size", "scale.*node", "add.*node"},
+		"ZTP_DEPLOYMENT":          {"ztp", "zero.*touch", "cluster.*deployment", "cluster.*provisioning", "site.*config", "managed.*cluster", "cluster.*install", "agent.*cluster", "hive.*deployment"},
 		// General purpose patterns
 		"NETWORK_CONNECTIVITY": {"curl", "url", "frr", "routing", "connectivity", "reach", "ping", "network", "traffic"},
 		"POD_HEALTH":           {"pods", "status", "running", "phase", "health", "ready", "condition", "state"},
