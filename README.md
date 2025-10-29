@@ -21,6 +21,11 @@ A sophisticated toolkit that extracts KubeSpecs from Go and Python test files, b
 - **OpenShift Awareness**: Automatic detection of Route↔Ingress and SCC↔PSA equivalents
 - **Utility Test Filtering**: Automatically filters out helper functions and utility tests
 
+### **Granular Test Extraction**
+- **By(...) Step Extraction**: Tracks operations within individual `By(...)` steps for fine-grained analysis
+- **Individual It(...) Block Extraction**: Extracts separate specs for each `It(...)` test block instead of file-level consolidation
+- **Step-Level Operation Mapping**: Maps Kubernetes operations to specific test steps for better traceability
+
 ### **Comprehensive Extraction**
 - **Go Tests**: Supports Ginkgo/Gomega, eco-goinfra, standard Go tests
 - **Python Tests**: Supports pytest, openshift library, subprocess calls
@@ -226,6 +231,7 @@ Each line in the spec files contains a complete test specification in JSON forma
 - `concurrency`: Concurrency-related patterns
 - `artifacts`: Test data files and golden files
 - `purpose`: Primary test intent (POD_HEALTH, NETWORK_CONNECTIVITY, etc.)
+- `by_steps`: Detailed breakdown of operations within `By(...)` steps (Ginkgo tests)
 
 **How to Analyze:**
 
@@ -534,6 +540,139 @@ The system automatically detects and categorizes tests by purpose:
 | NETWORK_POLICY | NETWORK_CONNECTIVITY, RESOURCE_VALIDATION |
 | NETWORK_CONNECTIVITY | NETWORK_POLICY, RESOURCE_VALIDATION |
 | All others | RESOURCE_VALIDATION |
+
+## 🔬 Advanced Extraction Features
+
+### **By(...) Step Extraction**
+
+The tool automatically extracts and tracks operations within individual `By(...)` steps in Ginkgo tests, providing fine-grained visibility into test execution flow.
+
+**How It Works:**
+
+1. **Step Detection**: Automatically identifies `By(...)` calls in Go and Python Ginkgo tests
+2. **Operation Mapping**: Maps Kubernetes operations to specific test steps
+3. **Granular Tracking**: Creates detailed `by_steps` array in JSON output
+4. **Cross-Reference**: Links operations in `actions` array to their originating steps via `by_step` field
+
+**Example By(...) Step Extraction:**
+
+```go
+// Original Ginkgo Test
+It("should create and verify pod", func() {
+    By("creating the pod")
+    pod := pods.Create(podSpec)
+    
+    By("waiting for pod to be ready")
+    pods.WaitForCondition(pod, "Ready")
+    
+    By("verifying pod status")
+    status := pods.Get(pod.Name)
+    Expect(status.Phase).To(Equal("Running"))
+})
+```
+
+**Extracted Spec with By(...) Steps:**
+
+```json
+{
+  "test_id": "test.go:TestPodCreation",
+  "actions": [
+    {"gvk": "v1/Pod", "verb": "create", "by_step": "creating the pod"},
+    {"gvk": "v1/Pod", "verb": "get", "by_step": "waiting for pod to be ready"},
+    {"gvk": "v1/Pod", "verb": "get", "by_step": "verifying pod status"}
+  ],
+  "by_steps": [
+    {
+      "description": "creating the pod",
+      "actions": [{"gvk": "v1/Pod", "verb": "create"}],
+      "line": 15
+    },
+    {
+      "description": "waiting for pod to be ready", 
+      "actions": [{"gvk": "v1/Pod", "verb": "get"}],
+      "line": 18
+    },
+    {
+      "description": "verifying pod status",
+      "actions": [{"gvk": "v1/Pod", "verb": "get"}], 
+      "line": 21
+    }
+  ]
+}
+```
+
+**Benefits:**
+
+- **🔍 Fine-Grained Analysis**: Understand exactly which operations happen in which test steps
+- **🐛 Debugging Support**: Pinpoint failures to specific test steps
+- **📊 Better Similarity Matching**: Compare tests at the step level, not just file level
+- **📝 Documentation**: Automatic extraction of test flow documentation from `By(...)` descriptions
+- **🔄 Cross-Language Support**: Works with both Go and Python Ginkgo patterns
+
+**Analysis Examples:**
+
+```bash
+# Find tests that create pods in their first step
+jq -r 'select(.by_steps[0].actions[].verb == "create" and .by_steps[0].actions[].gvk == "v1/Pod") | .test_id' go_specs.jsonl
+
+# Find tests with specific step descriptions
+jq -r 'select(.by_steps[].description | contains("waiting")) | .test_id' go_specs.jsonl
+
+# Compare step-level operations between tests
+jq '.by_steps[].actions[]' test1.json test2.json
+```
+
+### **Individual It(...) Block Extraction**
+
+For Ginkgo test files, the tool can extract each `It(...)` block as a separate test specification instead of consolidating at the file level.
+
+**When It(...) Block Extraction is Used:**
+
+- **Ginkgo Test Files**: Files containing `Describe()` and `It()` patterns
+- **Multiple Test Cases**: When a single file contains multiple distinct test scenarios
+- **Granular Analysis**: When file-level analysis is too coarse
+
+**Example:**
+
+```go
+// Original Ginkgo File: pod_test.go
+var _ = Describe("Pod Management", func() {
+    It("should create pod successfully", func() {
+        pod := pods.Create(podSpec)
+        // ... test logic
+    })
+    
+    It("should delete pod successfully", func() {
+        pods.Delete(podName)
+        // ... test logic  
+    })
+})
+```
+
+**Extracted as Separate Specs:**
+
+```json
+// First It(...) block
+{
+  "test_id": "pod_test.go:should create pod successfully",
+  "actions": [{"gvk": "v1/Pod", "verb": "create"}],
+  "purpose": "POD_MANAGEMENT"
+}
+
+// Second It(...) block  
+{
+  "test_id": "pod_test.go:should delete pod successfully", 
+  "actions": [{"gvk": "v1/Pod", "verb": "delete"}],
+  "purpose": "POD_MANAGEMENT"
+}
+```
+
+**Benefits:**
+
+- **🎯 Precise Matching**: Compare individual test scenarios instead of entire files
+- **📊 Better Metrics**: More accurate similarity scores for specific test cases
+- **🔍 Focused Analysis**: Identify exact duplicate test scenarios
+- **📈 Improved Coverage**: Better understanding of what each test case actually does
 
 ## 🔍 Example Results
 
@@ -980,4 +1119,98 @@ Enable verbose output:
 
 ```bash
 ./extract-and-match.sh -g /path/to/go -p /path/to/py -o debug_output 2>&1 | tee debug.log
+```
+
+## 🔧 Advanced Debugging Tools
+
+The project includes several specialized debugging tools for advanced analysis and troubleshooting:
+
+### **Available Debug Tools**
+
+- **`debug_filtering.py`**: Debug purpose-based filtering logic with specific test matches
+- **`debug_index_mapping.py`**: Analyze index mapping and spec loading issues  
+- **`debug_report_generation.py`**: Debug similarity report generation pipeline
+- **`debug_shared_signals.py`**: Analyze shared signal detection between tests
+- **`debug_specific_indices.py`**: Debug specific test indices and their matches
+- **`verify_csv_match.py`**: Verify CSV output matches expected format and content
+
+### **Using Debug Tools**
+
+**Debug Filtering Issues:**
+```bash
+# Debug why certain tests are being filtered out
+python debug_filtering.py
+
+# This will show:
+# - Purpose compatibility analysis
+# - Filtering decisions for specific matches
+# - Scoring adjustments and boosts
+```
+
+**Debug Index Mapping:**
+```bash  
+# Debug spec loading and index mapping
+python debug_index_mapping.py
+
+# This will show:
+# - How specs are loaded from JSONL files
+# - Index to spec mapping
+# - Any loading errors or inconsistencies
+```
+
+**Debug Shared Signals:**
+```bash
+# Analyze shared signal detection between specific tests
+python debug_shared_signals.py
+
+# This will show:
+# - Operation overlap analysis
+# - Signal type classification (exact, resource, category, verb_group)
+# - Signal strength calculations
+```
+
+**Verify Output Format:**
+```bash
+# Verify CSV outputs match expected format
+python verify_csv_match.py
+
+# This will check:
+# - CSV column structure
+# - Data type consistency
+# - Required field presence
+```
+
+### **Debug Tool Benefits**
+
+- **🔍 Deep Analysis**: Understand exactly how similarity matching works
+- **🐛 Issue Isolation**: Pinpoint specific problems in the pipeline
+- **⚙️ Parameter Tuning**: Optimize scoring weights and compatibility rules
+- **✅ Quality Assurance**: Verify output correctness and consistency
+- **📊 Performance Analysis**: Identify bottlenecks in matching pipeline
+
+### **Advanced Debugging Workflow**
+
+1. **Run Full Pipeline**: Generate initial results with `extract-and-match.sh`
+2. **Identify Issues**: Look for unexpected matches or missing similarities
+3. **Use Specific Debug Tool**: Run relevant debug tool for the issue type
+4. **Analyze Output**: Review debug output to understand root cause
+5. **Tune Parameters**: Adjust weights, compatibility rules, or patterns
+6. **Verify Fix**: Re-run pipeline and debug tools to confirm resolution
+
+**Example Debug Session:**
+```bash
+# 1. Run pipeline
+./extract-and-match.sh -g /path/to/go -p /path/to/py
+
+# 2. Found unexpected high-similarity match, debug filtering
+python debug_filtering.py > filtering_debug.log
+
+# 3. Check if indices are correct
+python debug_index_mapping.py > mapping_debug.log  
+
+# 4. Analyze shared signals for the problematic match
+python debug_shared_signals.py > signals_debug.log
+
+# 5. Verify final output format
+python verify_csv_match.py
 ```
