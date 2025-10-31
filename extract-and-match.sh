@@ -193,6 +193,64 @@ print_status "  Combining Go specs..."
 cat "$OUTPUT_DIR"/go_specs_*.jsonl > "$OUTPUT_DIR/go_specs.jsonl"
 print_success "Extracted $GO_SPECS_COUNT total Go test specs"
 
+# Optional: Extract per-file Ginkgo markdown specs
+print_status "Step 2b: Generating per-file Ginkgo markdown specs..."
+cd go-extractor
+
+# Build spec-extractor if needed (rebuild when any .go or go.mod/sum is newer than the binary)
+NEED_BUILD_SPEC=false
+if [[ ! -f "spec-extractor/spec-extractor" ]]; then
+    NEED_BUILD_SPEC=true
+else
+    if find spec-extractor -type f \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) -newer spec-extractor/spec-extractor | grep -q .; then
+        NEED_BUILD_SPEC=true
+    fi
+fi
+if [[ "$NEED_BUILD_SPEC" == "true" ]]; then
+    print_status "Building spec-extractor (changes detected)..."
+    if ! (cd spec-extractor && go build -o spec-extractor); then
+        print_warning "Failed to build spec-extractor, skipping markdown generation"
+        cd ..
+        goto_after_md=true
+    else
+        goto_after_md=false
+    fi
+else
+    print_status "spec-extractor binary is up to date"
+    goto_after_md=false
+fi
+
+if [[ "$goto_after_md" != "true" ]]; then
+    mkdir -p "../$OUTPUT_DIR/spec-md"
+    # Per-It JSONL output
+    GO_PER_IT_JSONL="../$OUTPUT_DIR/go_specs_per_it.jsonl"
+    rm -f "$GO_PER_IT_JSONL"
+    for i in "${!GO_ROOTS[@]}"; do
+        go_root="${GO_ROOTS[$i]}"
+        repo_name=$(basename "$go_root")
+        outdir="../$OUTPUT_DIR/spec-md/$repo_name"
+        print_status "  Rendering specs for $repo_name..."
+        if ! ./spec-extractor/spec-extractor --root "$go_root" --out "$outdir" --jsonl "$GO_PER_IT_JSONL" >/dev/null 2>&1; then
+            print_warning "  Failed to render markdown for $repo_name"
+        fi
+    done
+fi
+cd ..
+
+# Optional: Run similarity on per-It Go tests (self-match) to find duplicates
+if [[ -f "$OUTPUT_DIR/go_specs_per_it.jsonl" ]]; then
+    print_status "Step 2c: Finding similar Go tests (per-It JSONL)..."
+    if python match/build_index_and_match.py \
+        --go "$OUTPUT_DIR/go_specs_per_it.jsonl" \
+        --py "$OUTPUT_DIR/go_specs_per_it.jsonl" \
+        --out "$OUTPUT_DIR/go_per_it_sim.csv" \
+        --cov "$OUTPUT_DIR/go_per_it_cov.csv"; then
+        print_success "Generated $OUTPUT_DIR/go_per_it_sim.csv (per-It similarities)"
+    else
+        print_warning "Failed to compute per-It similarities"
+    fi
+fi
+
 # Step 3: Extract Python specs from all repositories
 print_status "Step 3: Extracting Python test specs from ${#PY_ROOTS[@]} repositories..."
 PY_SPECS_COUNT=0
