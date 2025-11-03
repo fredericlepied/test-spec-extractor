@@ -23,7 +23,9 @@ type Action struct {
 	Fields    map[string]interface{} `json:"fields,omitempty"`
 	Condition string                 `json:"condition,omitempty"`
 	Count     int                    `json:"count,omitempty"`
-	ByStep    string                 `json:"by_step,omitempty"` // Track which By(...) step this action belongs to
+	ByStep    string                 `json:"by_step,omitempty"`   // Track which By(...) step this action belongs to
+	Phase     string                 `json:"phase,omitempty"`     // Track phase: "setup", "test", "teardown", or empty for backwards compatibility
+	Resources []string               `json:"resources,omitempty"` // Resources involved in this action (GVKs)
 }
 
 type ByStep struct {
@@ -32,19 +34,40 @@ type ByStep struct {
 	Line        int      `json:"line,omitempty"`
 }
 
+// DescribeScope represents a Describe/When block and its nested structure
+type DescribeScope struct {
+	Call          *ast.CallExpr
+	Description   string // Description text from Describe/When/Context block (without prefix)
+	BeforeEachOps []Action
+	BeforeAllOps  []Action
+	AfterEachOps  []Action
+	AfterAllOps   []Action
+	ItBlocks      []*ast.CallExpr
+	Parent        *DescribeScope
+	Children      []*DescribeScope
+}
+
+type Expectation struct {
+	Target    string   `json:"target"`
+	Condition string   `json:"condition"`
+	Resources []string `json:"resources"` // Resources involved in this expectation (GVKs) - always present
+}
+
 type KubeSpec struct {
-	TestID            string              `json:"test_id"`
-	TestType          string              `json:"test_type"`
-	Dependencies      []string            `json:"dependencies"`
-	Environment       []string            `json:"environment"`
-	Actions           []Action            `json:"actions"`
-	Expectations      []map[string]string `json:"expectations"`
-	OpenShiftSpecific []string            `json:"openshift_specific"`
-	Concurrency       []string            `json:"concurrency"`
-	Artifacts         []string            `json:"artifacts"`
-	Purpose           string              `json:"purpose"`
-	Tech              []string            `json:"tech"`               // SR-IOV, PTP, DPDK, GPU, Virtualization, Storage, etc.
-	BySteps           []ByStep            `json:"by_steps,omitempty"` // Track operations in By(...) steps
+	TestID            string        `json:"test_id"`
+	TestType          string        `json:"test_type"`
+	Dependencies      []string      `json:"dependencies"`
+	Environment       []string      `json:"environment"`
+	Actions           []Action      `json:"actions"`
+	Expectations      []Expectation `json:"expectations"`
+	OpenShiftSpecific []string      `json:"openshift_specific"`
+	Concurrency       []string      `json:"concurrency"`
+	Artifacts         []string      `json:"artifacts"`
+	Purpose           string        `json:"purpose"`
+	Tech              []string      `json:"tech"`               // SR-IOV, PTP, DPDK, GPU, Virtualization, Storage, etc.
+	BySteps           []ByStep      `json:"by_steps,omitempty"` // Track operations in By(...) steps
+	Prereq            []string      `json:"prereq"`             // Prerequisites: resources created in setup phase (unique GVKs from setup actions) - always present
+	Context           []string      `json:"context"`            // Context hierarchy from Describe/When blocks (language-agnostic, no prefixes) - always present
 }
 
 // MarshalJSON ensures that nil slices are marshaled as empty arrays instead of null
@@ -63,7 +86,7 @@ func (ks KubeSpec) MarshalJSON() ([]byte, error) {
 		ks.Actions = []Action{}
 	}
 	if ks.Expectations == nil {
-		ks.Expectations = []map[string]string{}
+		ks.Expectations = []Expectation{}
 	}
 	if ks.OpenShiftSpecific == nil {
 		ks.OpenShiftSpecific = []string{}
@@ -79,6 +102,12 @@ func (ks KubeSpec) MarshalJSON() ([]byte, error) {
 	}
 	if ks.BySteps == nil {
 		ks.BySteps = []ByStep{}
+	}
+	if ks.Prereq == nil {
+		ks.Prereq = []string{}
+	}
+	if ks.Context == nil {
+		ks.Context = []string{}
 	}
 
 	return json.Marshal((Alias)(ks))
@@ -660,7 +689,7 @@ func detectNetworkingTech(testName, filePath string, comments []string) []string
 	return networkingTech
 }
 
-func detectPurpose(testName string, comments []string, actions []Action, expectations []map[string]string) string {
+func detectPurpose(testName string, comments []string, actions []Action, expectations []Expectation) string {
 	// Combine all text content for analysis
 	content := strings.ToLower(testName)
 	for _, comment := range comments {
@@ -675,8 +704,8 @@ func detectPurpose(testName string, comments []string, actions []Action, expecta
 		}
 	}
 	for _, exp := range expectations {
-		if condition, ok := exp["condition"]; ok {
-			content += " " + strings.ToLower(condition)
+		if exp.Condition != "" {
+			content += " " + strings.ToLower(exp.Condition)
 		}
 	}
 
@@ -979,33 +1008,83 @@ func isGinkgoTest(node ast.Node) bool {
 	return false
 }
 
-func detectExpectations(call *ast.CallExpr) []map[string]string {
-	var expectations []map[string]string
+func detectExpectations(call *ast.CallExpr) []Expectation {
+	var expectations []Expectation
 
 	// Check for Ginkgo/Gomega expectation patterns
 	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-		// Check for Expect() calls
-		if sel.Sel.Name == "Expect" {
-			expectation := extractGinkgoExpectation(call)
-			if expectation != nil {
+		// Check for chained matcher methods like .ToNot(HaveOccurred()), .To(BeTrue()), etc.
+		if sel.Sel.Name == "ToNot" || sel.Sel.Name == "To" || sel.Sel.Name == "Should" || sel.Sel.Name == "Eventually" || sel.Sel.Name == "Consistently" {
+			expMap := extractChainedMatcher(call)
+			if expMap != nil {
+				expectation := Expectation{
+					Target:    expMap["target"],
+					Condition: expMap["condition"],
+					Resources: extractResourcesFromExpectation(call),
+				}
 				expectations = append(expectations, expectation)
 			}
-		} else if sel.Sel.Name == "ToNot" || sel.Sel.Name == "To" || sel.Sel.Name == "Should" || sel.Sel.Name == "Eventually" || sel.Sel.Name == "Consistently" {
-			// Check for chained matcher methods like .ToNot(HaveOccurred())
-			expectation := extractChainedMatcher(call)
-			if expectation != nil {
+		}
+		// Check for Expect() calls - but only if they're not part of a chain
+		if sel.Sel.Name == "Expect" {
+			expMap := extractGinkgoExpectation(call)
+			if expMap != nil {
+				expectation := Expectation{
+					Target:    expMap["target"],
+					Condition: expMap["condition"],
+					Resources: extractResourcesFromExpectation(call),
+				}
 				expectations = append(expectations, expectation)
 			}
 		}
 	} else if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "Expect" {
 		// Check for direct function calls like Expect(...)
-		expectation := extractGinkgoExpectation(call)
-		if expectation != nil {
+		expMap := extractGinkgoExpectation(call)
+		if expMap != nil {
+			expectation := Expectation{
+				Target:    expMap["target"],
+				Condition: expMap["condition"],
+				Resources: extractResourcesFromExpectation(call),
+			}
 			expectations = append(expectations, expectation)
 		}
 	}
 
 	return expectations
+}
+
+// extractResourcesFromExpectation extracts GVKs mentioned in an expectation
+func extractResourcesFromExpectation(call *ast.CallExpr) []string {
+	resources := []string{}
+	argStr := astToString(call)
+	argStrLower := strings.ToLower(argStr)
+
+	// Common resource patterns in expectations
+	resourcePatterns := map[string]string{
+		"pod":           "v1/Pod",
+		"deployment":    "apps/v1/Deployment",
+		"service":       "v1/Service",
+		"namespace":     "v1/Namespace",
+		"route":         "route.openshift.io/v1/Route",
+		"ingress":       "networking.k8s.io/v1/Ingress",
+		"configmap":     "v1/ConfigMap",
+		"secret":        "v1/Secret",
+		"node":          "v1/Node",
+		"cluster":       "config.openshift.io/v1/ClusterVersion",
+		"baremetalhost": "metal3.io/v1alpha1/BareMetalHost",
+		"pvc":           "v1/PersistentVolumeClaim",
+		"pv":            "v1/PersistentVolume",
+		"operator":      "operators.coreos.com/v1alpha1/ClusterServiceVersion",
+		"subscription":  "operators.coreos.com/v1alpha1/Subscription",
+	}
+
+	for keyword, gvk := range resourcePatterns {
+		if strings.Contains(argStrLower, keyword) {
+			resources = append(resources, gvk)
+		}
+	}
+
+	return resources
 }
 
 func extractGinkgoExpectation(call *ast.CallExpr) map[string]string {
@@ -1029,8 +1108,7 @@ func extractGinkgoExpectation(call *ast.CallExpr) map[string]string {
 
 func extractChainedMatcher(call *ast.CallExpr) map[string]string {
 	// This is a chained matcher method like .ToNot(HaveOccurred())
-	// We need to find the original value being tested
-	// For now, we'll extract the matcher method name and arguments
+	// We need to find the original value being tested by traversing up the chain
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return nil
@@ -1042,17 +1120,68 @@ func extractChainedMatcher(call *ast.CallExpr) map[string]string {
 		args[i] = astToString(arg)
 	}
 
-	// Create a meaningful condition from the matcher
-	condition := matcherName + "(" + strings.Join(args, ", ") + ")"
+	// Try to find the original Expect() call by traversing the selector chain
+	originalValue := ""
+	if expectCall, ok := sel.X.(*ast.CallExpr); ok {
+		if expectSel, ok := expectCall.Fun.(*ast.SelectorExpr); ok && expectSel.Sel.Name == "Expect" {
+			// Found Expect() call, extract the argument
+			if len(expectCall.Args) > 0 {
+				originalValue = astToString(expectCall.Args[0])
+			}
+		} else if expectIdent, ok := expectCall.Fun.(*ast.Ident); ok && expectIdent.Name == "Expect" {
+			// Direct Expect() call
+			if len(expectCall.Args) > 0 {
+				originalValue = astToString(expectCall.Args[0])
+			}
+		}
+	}
 
-	// Try to classify based on the matcher type
+	// Create a language-agnostic condition based on the semantic meaning
+	condition := ""
 	target := "test_condition"
-	if strings.Contains(condition, "HaveOccurred") || strings.Contains(condition, "Not(HaveOccurred)") {
-		target = "test_condition" // Error handling
-	} else if strings.Contains(condition, "BeEmpty") || strings.Contains(condition, "Not(BeEmpty)") {
-		target = "resource_count" // Empty/not empty usually means count checks
-	} else if strings.Contains(condition, "BeTrue") || strings.Contains(condition, "BeFalse") {
-		target = "test_condition" // Boolean conditions
+
+	// Analyze the matcher and original value to create semantic conditions
+	if strings.Contains(originalValue, "err") && strings.Contains(matcherName, "ToNot") && strings.Contains(strings.Join(args, ""), "HaveOccurred") {
+		condition = "error_handling"
+		target = "test_condition"
+	} else if strings.Contains(originalValue, "err") && strings.Contains(matcherName, "To") && strings.Contains(strings.Join(args, ""), "HaveOccurred") {
+		condition = "error_expected"
+		target = "test_condition"
+	} else if strings.Contains(matcherName, "BeEmpty") || strings.Contains(matcherName, "ToNot") && strings.Contains(strings.Join(args, ""), "BeEmpty") {
+		condition = "resource_count_validation"
+		target = "resource_count"
+	} else if strings.Contains(matcherName, "BeTrue") || strings.Contains(strings.Join(args, ""), "BeTrue") {
+		condition = "boolean_validation_true"
+		target = "test_condition"
+	} else if strings.Contains(matcherName, "BeFalse") || strings.Contains(strings.Join(args, ""), "BeFalse") {
+		condition = "boolean_validation_false"
+		target = "test_condition"
+	} else if strings.Contains(originalValue, "len(") || strings.Contains(originalValue, "count") {
+		condition = "count_validation"
+		target = "resource_count"
+	} else if strings.Contains(originalValue, "version") || strings.Contains(originalValue, "image") {
+		condition = "version_validation"
+		target = "resource_version"
+	} else if strings.Contains(originalValue, "status") || strings.Contains(originalValue, "online") || strings.Contains(originalValue, "phase") {
+		condition = "status_validation"
+		target = "resource_status"
+	} else if strings.Contains(originalValue, "ready") || strings.Contains(originalValue, "available") {
+		condition = "readiness_validation"
+		target = "resource_status"
+	} else if strings.Contains(originalValue, "deleted") || strings.Contains(originalValue, "removed") {
+		condition = "deletion_validation"
+		target = "resource_deletion"
+	} else {
+		// Generic semantic condition based on matcher type
+		if strings.Contains(matcherName, "Equal") {
+			condition = "equality_validation"
+		} else if strings.Contains(matcherName, "Contain") {
+			condition = "containment_validation"
+		} else if strings.Contains(matcherName, "Match") {
+			condition = "pattern_validation"
+		} else {
+			condition = "assertion_validation"
+		}
 	}
 
 	return map[string]string{
@@ -1062,36 +1191,38 @@ func extractChainedMatcher(call *ast.CallExpr) map[string]string {
 }
 
 func extractChainedExpectation(arg ast.Expr, call *ast.CallExpr) map[string]string {
-	// Extract the actual value being tested, not just the matcher
+	// Extract the actual value being tested and create language-agnostic conditions
 	argStr := astToString(arg)
 
-	// For Ginkgo/Gomega, we want to extract the actual value being tested
-	// The matcher (BeTrue, Not(BeEmpty), etc.) is less important than the value
-
 	// Standardized target classification for similarity search compatibility
-	target := "test_condition" // Default target
+	target := "test_condition"          // Default target
+	condition := "assertion_validation" // Default condition
 
 	// Check for common patterns in the actual value being tested
 	if strings.Contains(argStr, "err") {
-		target = "test_condition" // Error conditions are still test conditions
+		target = "test_condition"
+		condition = "error_handling"
 	} else if strings.Contains(argStr, "version") || strings.Contains(argStr, "image") {
 		target = "resource_version"
+		condition = "version_validation"
 	} else if strings.Contains(argStr, "len(") || strings.Contains(argStr, "count") {
 		target = "resource_count"
-	} else if strings.Contains(argStr, "online") || strings.Contains(argStr, "status") {
+		condition = "count_validation"
+	} else if strings.Contains(argStr, "online") || strings.Contains(argStr, "status") || strings.Contains(argStr, "phase") {
 		target = "resource_status"
+		condition = "status_validation"
+	} else if strings.Contains(argStr, "ready") || strings.Contains(argStr, "available") {
+		target = "resource_status"
+		condition = "readiness_validation"
 	} else if strings.Contains(argStr, "empty") || strings.Contains(argStr, "deleted") {
 		target = "resource_deletion"
+		condition = "deletion_validation"
 	} else if strings.Contains(argStr, "cluster") || strings.Contains(argStr, "namespace") || strings.Contains(argStr, "pod") {
-		target = "resource_count" // Cluster/namespace/pod related tests are usually about counts
-	}
-
-	// Create a more meaningful condition that includes both the value and the matcher
-	condition := argStr
-	if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Expect" {
-		// Try to find the chained matcher method
-		// This is a simplified approach - in practice, you'd need to traverse the full call chain
-		condition = argStr + " (Gomega matcher)"
+		target = "resource_count"
+		condition = "resource_count_validation"
+	} else if strings.Contains(argStr, "true") || strings.Contains(argStr, "false") {
+		target = "test_condition"
+		condition = "boolean_validation"
 	}
 
 	return map[string]string{
@@ -1158,6 +1289,79 @@ func isByCall(call *ast.CallExpr) bool {
 	return false
 }
 
+// isBeforeEachCall checks if a call expression is a BeforeEach(...) call
+func isBeforeEachCall(call *ast.CallExpr) bool {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "BeforeEach" || sel.Sel.Name == "FBeforeEach" || sel.Sel.Name == "PBeforeEach"
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		return ident.Name == "BeforeEach" || ident.Name == "FBeforeEach" || ident.Name == "PBeforeEach"
+	}
+	return false
+}
+
+// isBeforeAllCall checks if a call expression is a BeforeAll(...) call
+func isBeforeAllCall(call *ast.CallExpr) bool {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "BeforeAll" || sel.Sel.Name == "FBeforeAll" || sel.Sel.Name == "PBeforeAll"
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		return ident.Name == "BeforeAll" || ident.Name == "FBeforeAll" || ident.Name == "PBeforeAll"
+	}
+	return false
+}
+
+// isAfterEachCall checks if a call expression is an AfterEach(...) call
+func isAfterEachCall(call *ast.CallExpr) bool {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "AfterEach" || sel.Sel.Name == "FAfterEach" || sel.Sel.Name == "PAfterEach"
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		return ident.Name == "AfterEach" || ident.Name == "FAfterEach" || ident.Name == "PAfterEach"
+	}
+	return false
+}
+
+// isAfterAllCall checks if a call expression is an AfterAll(...) call
+func isAfterAllCall(call *ast.CallExpr) bool {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "AfterAll" || sel.Sel.Name == "FAfterAll" || sel.Sel.Name == "PAfterAll"
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		return ident.Name == "AfterAll" || ident.Name == "FAfterAll" || ident.Name == "PAfterAll"
+	}
+	return false
+}
+
+// isDescribeCall checks if a call expression is a Describe(...) call
+func isDescribeCall(call *ast.CallExpr) bool {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "Describe" || sel.Sel.Name == "FDescribe" || sel.Sel.Name == "PDescribe" || sel.Sel.Name == "XDescribe"
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		return ident.Name == "Describe" || ident.Name == "FDescribe" || ident.Name == "PDescribe" || ident.Name == "XDescribe"
+	}
+	return false
+}
+
+// isWhenCall checks if a call expression is a When(...) call
+// When blocks behave exactly like Describe blocks in Ginkgo
+func isWhenCall(call *ast.CallExpr) bool {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "When" || sel.Sel.Name == "FWhen" || sel.Sel.Name == "PWhen" || sel.Sel.Name == "XWhen"
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		return ident.Name == "When" || ident.Name == "FWhen" || ident.Name == "PWhen" || ident.Name == "XWhen"
+	}
+	return false
+}
+
+// isBlockingCall checks if a call expression is a blocking call (Describe, When, Context)
+// These blocks can contain nested hooks and It blocks
+func isBlockingCall(call *ast.CallExpr) bool {
+	return isDescribeCall(call) || isWhenCall(call)
+}
+
 // findOperationsAfterBy finds all operations that occur after a By(...) call
 func findOperationsAfterBy(byCall *ast.CallExpr, fset *token.FileSet, parentNode ast.Node) []Action {
 	var operations []Action
@@ -1169,6 +1373,126 @@ func findOperationsAfterBy(byCall *ast.CallExpr, fset *token.FileSet, parentNode
 			// Analyze the function body for operations
 			operations = analyzeStatementForOperations(funcLit.Body, fset)
 		}
+	}
+
+	return operations
+}
+
+// findOperationsInBeforeEach finds Kubernetes operations within a BeforeEach(...) block
+func findOperationsInBeforeEach(beforeEachCall *ast.CallExpr, fset *token.FileSet) []Action {
+	var operations []Action
+
+	if len(beforeEachCall.Args) < 1 {
+		return operations
+	}
+
+	// BeforeEach(func() { ... })
+	var funcLit *ast.FuncLit
+	for _, arg := range beforeEachCall.Args {
+		if fl, ok := arg.(*ast.FuncLit); ok {
+			funcLit = fl
+			break
+		}
+	}
+
+	if funcLit == nil {
+		return operations
+	}
+
+	// Analyze the function body for operations and tag them as setup
+	operations = analyzeStatementForOperations(funcLit.Body, fset)
+	for i := range operations {
+		operations[i].Phase = "setup"
+	}
+
+	return operations
+}
+
+// findOperationsInBeforeAll finds Kubernetes operations within a BeforeAll(...) block
+func findOperationsInBeforeAll(beforeAllCall *ast.CallExpr, fset *token.FileSet) []Action {
+	var operations []Action
+
+	if len(beforeAllCall.Args) < 1 {
+		return operations
+	}
+
+	// BeforeAll(func() { ... })
+	var funcLit *ast.FuncLit
+	for _, arg := range beforeAllCall.Args {
+		if fl, ok := arg.(*ast.FuncLit); ok {
+			funcLit = fl
+			break
+		}
+	}
+
+	if funcLit == nil {
+		return operations
+	}
+
+	// Analyze the function body for operations and tag them as setup
+	operations = analyzeStatementForOperations(funcLit.Body, fset)
+	for i := range operations {
+		operations[i].Phase = "setup"
+	}
+
+	return operations
+}
+
+// findOperationsInAfterEach finds Kubernetes operations within an AfterEach(...) block
+func findOperationsInAfterEach(afterEachCall *ast.CallExpr, fset *token.FileSet) []Action {
+	var operations []Action
+
+	if len(afterEachCall.Args) < 1 {
+		return operations
+	}
+
+	// AfterEach(func() { ... })
+	var funcLit *ast.FuncLit
+	for _, arg := range afterEachCall.Args {
+		if fl, ok := arg.(*ast.FuncLit); ok {
+			funcLit = fl
+			break
+		}
+	}
+
+	if funcLit == nil {
+		return operations
+	}
+
+	// Analyze the function body for operations and tag them as teardown
+	operations = analyzeStatementForOperations(funcLit.Body, fset)
+	for i := range operations {
+		operations[i].Phase = "teardown"
+	}
+
+	return operations
+}
+
+// findOperationsInAfterAll finds Kubernetes operations within an AfterAll(...) block
+func findOperationsInAfterAll(afterAllCall *ast.CallExpr, fset *token.FileSet) []Action {
+	var operations []Action
+
+	if len(afterAllCall.Args) < 1 {
+		return operations
+	}
+
+	// AfterAll(func() { ... })
+	var funcLit *ast.FuncLit
+	for _, arg := range afterAllCall.Args {
+		if fl, ok := arg.(*ast.FuncLit); ok {
+			funcLit = fl
+			break
+		}
+	}
+
+	if funcLit == nil {
+		return operations
+	}
+
+	// Analyze the function body for operations and tag them as teardown
+	operations = analyzeStatementForOperations(funcLit.Body, fset)
+	for i := range operations {
+		operations[i].Phase = "teardown"
 	}
 
 	return operations
@@ -1225,7 +1549,11 @@ func analyzeStatementForOperations(stmt ast.Stmt, fset *token.FileSet) []Action 
 			if exts := detectExternals(x); len(exts) > 0 {
 				for _, ext := range exts {
 					if gvk, verb := mapCommandToAPI(ext); gvk != "" && verb != "" {
-						operations = append(operations, Action{GVK: gvk, Verb: strings.ToLower(verb)})
+						operations = append(operations, Action{
+							GVK:       gvk,
+							Verb:      strings.ToLower(verb),
+							Resources: []string{gvk}, // Populate resources
+						})
 					}
 				}
 			}
@@ -1233,16 +1561,22 @@ func analyzeStatementForOperations(stmt ast.Stmt, fset *token.FileSet) []Action 
 		case *ast.CompositeLit:
 			// Check for Kubernetes composite literals
 			if gvk, osh := kindFromCompositeLit(x); gvk != "" {
-				action := Action{GVK: gvk}
+				finalGVK := gvk
 				if osh != "" {
-					action.GVK = osh // Use OpenShift-specific GVK if available
+					finalGVK = osh // Use OpenShift-specific GVK if available
 				}
-				operations = append(operations, action)
+				operations = append(operations, Action{
+					GVK:       finalGVK,
+					Resources: []string{finalGVK}, // Populate resources
+				})
 			}
 
 			// Check for Kubernetes API types in composite literals
 			if gvk := detectK8sTypePattern(x); gvk != "" {
-				operations = append(operations, Action{GVK: gvk})
+				operations = append(operations, Action{
+					GVK:       gvk,
+					Resources: []string{gvk}, // Populate resources
+				})
 			}
 		}
 		return true
@@ -1281,9 +1615,208 @@ func analyzeBySteps(f *ast.File, fset *token.FileSet) []ByStep {
 	return bySteps
 }
 
+// buildDescribeScopeTree builds a tree of Describe/When scopes and their nested hooks and It blocks
+func buildDescribeScopeTree(f *ast.File, fset *token.FileSet) []*DescribeScope {
+	var roots []*DescribeScope
+
+	// Helper function to process a Describe/When block recursively
+	var processBlock func(call *ast.CallExpr, parent *DescribeScope) *DescribeScope
+	processBlock = func(call *ast.CallExpr, parent *DescribeScope) *DescribeScope {
+		// Extract description from the block (without framework prefix)
+		description := extractBlockDescription(call)
+		scope := &DescribeScope{
+			Call:          call,
+			Description:   description,
+			BeforeEachOps: []Action{},
+			BeforeAllOps:  []Action{},
+			AfterEachOps:  []Action{},
+			AfterAllOps:   []Action{},
+			ItBlocks:      []*ast.CallExpr{},
+			Parent:        parent,
+			Children:      []*DescribeScope{},
+		}
+
+		// The Describe/When call has a function literal that contains the block body
+		// The function literal might be at any argument position due to decorators like Ordered, Label, etc.
+		// e.g., Describe("GPU", Ordered, Label(...), func() {...})
+		var funcLit *ast.FuncLit
+		for _, arg := range call.Args {
+			if fl, ok := arg.(*ast.FuncLit); ok {
+				funcLit = fl
+				break
+			}
+		}
+
+		if funcLit != nil {
+			ast.Inspect(funcLit.Body, func(n2 ast.Node) bool {
+				call2, ok := n2.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+
+				if isBeforeEachCall(call2) {
+					scope.BeforeEachOps = append(scope.BeforeEachOps, findOperationsInBeforeEach(call2, fset)...)
+				} else if isBeforeAllCall(call2) {
+					scope.BeforeAllOps = append(scope.BeforeAllOps, findOperationsInBeforeAll(call2, fset)...)
+				} else if isAfterEachCall(call2) {
+					scope.AfterEachOps = append(scope.AfterEachOps, findOperationsInAfterEach(call2, fset)...)
+				} else if isAfterAllCall(call2) {
+					scope.AfterAllOps = append(scope.AfterAllOps, findOperationsInAfterAll(call2, fset)...)
+				} else if isItCall(call2) {
+					scope.ItBlocks = append(scope.ItBlocks, call2)
+				} else if isBlockingCall(call2) {
+					// Nested Describe or When - process recursively
+					childScope := processBlock(call2, scope)
+					scope.Children = append(scope.Children, childScope)
+				}
+
+				return true
+			})
+		}
+
+		return scope
+	}
+
+	// Find all top-level Describe/When blocks by checking file-level declarations
+	// Top-level blocks are usually var _ = Describe(...) or var _ = When(...) or just Describe(...)/When(...)
+	ast.Inspect(f, func(n ast.Node) bool {
+		// Check for var declarations with Describe/When calls
+		if genDecl, ok := n.(*ast.GenDecl); ok && genDecl.Tok == token.VAR {
+			for _, spec := range genDecl.Specs {
+				if valueSpec, ok := spec.(*ast.ValueSpec); ok {
+					for _, value := range valueSpec.Values {
+						if call, ok := value.(*ast.CallExpr); ok && isBlockingCall(call) {
+							scope := processBlock(call, nil)
+							roots = append(roots, scope)
+							return false // Don't recurse into this block's body (already processed)
+						}
+					}
+				}
+			}
+		}
+
+		// Also check for direct Describe/When calls at file level (less common but possible)
+		// This handles cases where Describe/When is called directly, not in a var declaration
+		// We need to check if it's not nested inside a function literal
+		if call, ok := n.(*ast.CallExpr); ok && isBlockingCall(call) {
+			// Check if this block is at the top level (not inside a function)
+			// by verifying it's not inside any function literal
+			isTopLevel := true
+			ast.Inspect(f, func(parent ast.Node) bool {
+				if funcLit, ok := parent.(*ast.FuncLit); ok {
+					// Check if our block call is inside this function literal
+					if call.Pos() > funcLit.Pos() && call.End() < funcLit.End() {
+						isTopLevel = false
+						return false
+					}
+				}
+				return true
+			})
+
+			if isTopLevel {
+				scope := processBlock(call, nil)
+				roots = append(roots, scope)
+				return false // Don't recurse into this block's body (already processed)
+			}
+		}
+
+		return true
+	})
+
+	return roots
+}
+
+// findDescribeScopeForIt finds the Describe/When scope that contains an It block
+func findDescribeScopeForIt(itCall *ast.CallExpr, scopes []*DescribeScope) *DescribeScope {
+	itPos := itCall.Pos()
+	itEnd := itCall.End()
+
+	for _, scope := range scopes {
+		// First try pointer comparison (fastest and most reliable)
+		for _, it := range scope.ItBlocks {
+			if it == itCall {
+				return scope
+			}
+		}
+
+		// If pointer comparison fails, check if It block is within this scope's AST range
+		// This handles cases where the It block might not have been registered in ItBlocks
+		// but is still within the scope's function literal
+		if scope.Call != nil && len(scope.Call.Args) >= 2 {
+			// Check if It block is within the scope's function literal body
+			if funcLit, ok := scope.Call.Args[1].(*ast.FuncLit); ok {
+				if funcLit.Pos() < itPos && itEnd < funcLit.End() {
+					// It block is within this scope's function literal
+					// Check if it's not in a nested scope first
+					foundInChild := false
+					for _, child := range scope.Children {
+						if child.Call != nil && len(child.Call.Args) >= 2 {
+							if childFuncLit, ok := child.Call.Args[1].(*ast.FuncLit); ok {
+								if childFuncLit.Pos() < itPos && itEnd < childFuncLit.End() {
+									foundInChild = true
+									break
+								}
+							}
+						}
+					}
+					if !foundInChild {
+						return scope
+					}
+				}
+			}
+		}
+
+		// Recursively check children (which can be nested Describe or When blocks)
+		if found := findDescribeScopeForIt(itCall, scope.Children); found != nil {
+			return found
+		}
+	}
+
+	return nil
+}
+
+// collectSetupOperations collects all setup operations from a Describe scope and its parents
+func collectSetupOperations(scope *DescribeScope) []Action {
+	var setupOps []Action
+
+	// Collect from parent scopes first (outer scopes)
+	if scope.Parent != nil {
+		setupOps = append(setupOps, collectSetupOperations(scope.Parent)...)
+	}
+
+	// Add BeforeAll operations from this scope (run once per Describe)
+	setupOps = append(setupOps, scope.BeforeAllOps...)
+
+	// Add BeforeEach operations from this scope (run before each It)
+	setupOps = append(setupOps, scope.BeforeEachOps...)
+
+	return setupOps
+}
+
+// collectTeardownOperations collects all teardown operations from a Describe scope and its parents
+func collectTeardownOperations(scope *DescribeScope) []Action {
+	var teardownOps []Action
+
+	// Add AfterEach operations from this scope (run after each It)
+	teardownOps = append(teardownOps, scope.AfterEachOps...)
+
+	// Collect from parent scopes (outer scopes)
+	if scope.Parent != nil {
+		parentTeardown := collectTeardownOperations(scope.Parent)
+		teardownOps = append(teardownOps, parentTeardown...)
+	}
+
+	// Note: AfterAll is typically handled at suite level, not per-It
+
+	return teardownOps
+}
+
 // extractItBlocks extracts individual It(...) blocks from a Ginkgo test file
 func extractItBlocks(f *ast.File, fset *token.FileSet, filePath, rootPath string) []KubeSpec {
 	var specs []KubeSpec
+
+	// Build the Describe scope tree
+	describeScopes := buildDescribeScopeTree(f, fset)
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -1297,10 +1830,73 @@ func extractItBlocks(f *ast.File, fset *token.FileSet, filePath, rootPath string
 			operations := findOperationsInIt(call, fset, n)
 			expectations := findExpectationsInIt(call, fset, n)
 
+			// Tag test body operations with "test" phase and populate resources
+			for i := range operations {
+				if operations[i].Phase == "" {
+					operations[i].Phase = "test"
+				}
+				// Populate resources for each action (the action's GVK if present)
+				if operations[i].GVK != "" {
+					operations[i].Resources = []string{operations[i].GVK}
+				}
+			}
+
+			// Find the Describe/When scope that contains this It block
+			scope := findDescribeScopeForIt(call, describeScopes)
+			var context []string
+
+			// Collect setup operations from this scope and parent scopes
+			// Even if scope is nil, we'll just get empty setupOps, which is fine
+			setupOps := []Action{}
+			if scope != nil {
+				setupOps = collectSetupOperations(scope)
+			}
+			// Ensure setup operations have phase="setup" set (they should already, but be safe)
+			for i := range setupOps {
+				setupOps[i].Phase = "setup"
+				// Populate resources for setup operations
+				if setupOps[i].GVK != "" {
+					setupOps[i].Resources = []string{setupOps[i].GVK}
+				}
+			}
+			operations = append(setupOps, operations...)
+
+			// Collect teardown operations
+			teardownOps := []Action{}
+			if scope != nil {
+				teardownOps = collectTeardownOperations(scope)
+			}
+			// Populate resources for teardown operations
+			for i := range teardownOps {
+				if teardownOps[i].GVK != "" {
+					teardownOps[i].Resources = []string{teardownOps[i].GVK}
+				}
+			}
+			operations = append(operations, teardownOps...)
+
+			// Collect context hierarchy by traversing up the parent chain
+			if scope != nil {
+				currentScope := scope
+				for currentScope != nil {
+					if currentScope.Description != "" {
+						// Prepend to build from outermost to innermost
+						context = append([]string{currentScope.Description}, context...)
+					}
+					currentScope = currentScope.Parent
+				}
+			}
+
 			// Create a unique test ID for this It block
 			basename := filepath.Base(rootPath)
 			relativePath := strings.TrimPrefix(strings.TrimPrefix(filePath, rootPath), "/")
 			testID := fmt.Sprintf("%s/%s:It_%s", basename, relativePath, sanitizeTestName(description))
+
+			// Ensure all expectations have resources field (even if empty)
+			for i := range expectations {
+				if expectations[i].Resources == nil {
+					expectations[i].Resources = []string{}
+				}
+			}
 
 			spec := KubeSpec{
 				TestID:            testID,
@@ -1314,10 +1910,32 @@ func extractItBlocks(f *ast.File, fset *token.FileSet, filePath, rootPath string
 				Artifacts:         []string{},
 				Tech:              []string{},
 				BySteps:           []ByStep{},
+				Prereq:            []string{}, // Initialize prereq to empty slice (will be populated below)
+				Context:           context,    // Context hierarchy (already collected above)
 			}
 
 			// Analyze the It block for additional patterns
 			analyzeItBlock(call, &spec, fset)
+
+			// Ensure all operations are tagged with phase (default to "test" for operations from analyzeItBlock)
+			// CRITICAL: Only set phase to "test" if it's empty - don't overwrite "setup" or "teardown" phases
+			for i := range spec.Actions {
+				if spec.Actions[i].Phase == "" {
+					spec.Actions[i].Phase = "test"
+				}
+			}
+
+
+			// Extract prerequisites (unique GVKs from setup phase actions)
+			prereqSet := make(map[string]bool)
+			for _, action := range spec.Actions {
+				if action.Phase == "setup" && action.GVK != "" {
+					prereqSet[action.GVK] = true
+				}
+			}
+			for gvk := range prereqSet {
+				spec.Prereq = append(spec.Prereq, gvk)
+			}
 
 			specs = append(specs, spec)
 		}
@@ -1356,17 +1974,43 @@ func extractItDescription(call *ast.CallExpr) string {
 	return "unnamed_test"
 }
 
+// extractBlockDescription extracts the description string from a Describe/When/Context call
+// Returns only the description text, without any framework prefix (language-agnostic)
+func extractBlockDescription(call *ast.CallExpr) string {
+	if len(call.Args) == 0 {
+		return ""
+	}
+
+	// The first argument should be the description string
+	if bl, ok := call.Args[0].(*ast.BasicLit); ok && bl.Kind == token.STRING {
+		// Remove quotes and return the clean description (no prefix added)
+		return strings.Trim(bl.Value, "\"`")
+	}
+
+	return ""
+}
+
 // findOperationsInIt finds Kubernetes operations within an It(...) block
 func findOperationsInIt(itCall *ast.CallExpr, fset *token.FileSet, parentNode ast.Node) []Action {
 	var operations []Action
 
-	// The It(...) call should have a function literal as the second argument
+	// The It(...) call should have a function literal as one of its arguments
+	// It can be the second argument: It("description", func() {...})
+	// Or the third argument: It("description", reportxml.ID("123"), func() {...})
 	if len(itCall.Args) < 2 {
 		return operations
 	}
 
-	funcLit, ok := itCall.Args[1].(*ast.FuncLit)
-	if !ok {
+	var funcLit *ast.FuncLit
+	// Look for the function literal in the arguments
+	for _, arg := range itCall.Args {
+		if fl, ok := arg.(*ast.FuncLit); ok {
+			funcLit = fl
+			break
+		}
+	}
+
+	if funcLit == nil {
 		return operations
 	}
 
@@ -1379,6 +2023,7 @@ func findOperationsInIt(itCall *ast.CallExpr, fset *token.FileSet, parentNode as
 				action := Action{}
 				if gvk != "" {
 					action.GVK = gvk
+					action.Resources = []string{gvk} // Populate resources
 				}
 				if verb != "" {
 					action.Verb = verb
@@ -1401,6 +2046,7 @@ func findOperationsInIt(itCall *ast.CallExpr, fset *token.FileSet, parentNode as
 						action := Action{}
 						if gvk != "" {
 							action.GVK = gvk
+							action.Resources = []string{gvk} // Populate resources
 						}
 						if verb != "" {
 							action.Verb = verb
@@ -1417,16 +2063,26 @@ func findOperationsInIt(itCall *ast.CallExpr, fset *token.FileSet, parentNode as
 }
 
 // findExpectationsInIt finds expectations/assertions within an It(...) block
-func findExpectationsInIt(itCall *ast.CallExpr, fset *token.FileSet, parentNode ast.Node) []map[string]string {
-	var expectations []map[string]string
+func findExpectationsInIt(itCall *ast.CallExpr, fset *token.FileSet, parentNode ast.Node) []Expectation {
+	var expectations []Expectation
 
-	// The It(...) call should have a function literal as the second argument
+	// The It(...) call should have a function literal as one of its arguments
+	// It can be the second argument: It("description", func() {...})
+	// Or the third argument: It("description", reportxml.ID("123"), func() {...})
 	if len(itCall.Args) < 2 {
 		return expectations
 	}
 
-	funcLit, ok := itCall.Args[1].(*ast.FuncLit)
-	if !ok {
+	var funcLit *ast.FuncLit
+	// Look for the function literal in the arguments
+	for _, arg := range itCall.Args {
+		if fl, ok := arg.(*ast.FuncLit); ok {
+			funcLit = fl
+			break
+		}
+	}
+
+	if funcLit == nil {
 		return expectations
 	}
 
@@ -1435,24 +2091,47 @@ func findExpectationsInIt(itCall *ast.CallExpr, fset *token.FileSet, parentNode 
 		switch x := n.(type) {
 		case *ast.CallExpr:
 			if exps := detectExpectations(x); len(exps) > 0 {
+				// Ensure all expectations have resources field (even if empty)
+				for i := range exps {
+					if exps[i].Resources == nil {
+						exps[i].Resources = []string{}
+					}
+				}
 				expectations = append(expectations, exps...)
 			}
 		}
 		return true
 	})
 
+	// Ensure all expectations have resources field (even if empty) before returning
+	for i := range expectations {
+		if expectations[i].Resources == nil {
+			expectations[i].Resources = []string{}
+		}
+	}
+
 	return expectations
 }
 
 // analyzeItBlock performs additional analysis on an It block
 func analyzeItBlock(itCall *ast.CallExpr, spec *KubeSpec, fset *token.FileSet) {
-	// The It(...) call should have a function literal as the second argument
+	// The It(...) call should have a function literal as one of its arguments
+	// It can be the second argument: It("description", func() {...})
+	// Or the third argument: It("description", reportxml.ID("123"), func() {...})
 	if len(itCall.Args) < 2 {
 		return
 	}
 
-	funcLit, ok := itCall.Args[1].(*ast.FuncLit)
-	if !ok {
+	var funcLit *ast.FuncLit
+	// Look for the function literal in the arguments
+	for _, arg := range itCall.Args {
+		if fl, ok := arg.(*ast.FuncLit); ok {
+			funcLit = fl
+			break
+		}
+	}
+
+	if funcLit == nil {
 		return
 	}
 
@@ -1475,12 +2154,24 @@ func analyzeItBlock(itCall *ast.CallExpr, spec *KubeSpec, fset *token.FileSet) {
 				if verb != "" {
 					verbs[verb] = true
 				}
+				// Create action with resources
+				action := Action{}
+				if gvk != "" {
+					action.GVK = gvk
+					action.Resources = []string{gvk}
+				}
+				if verb != "" {
+					action.Verb = strings.ToLower(verb)
+				}
+				spec.Actions = append(spec.Actions, action)
 			}
 
 			// Check for standard Kubernetes API calls
 			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
 				if verbSet[sel.Sel.Name] {
 					verbs[sel.Sel.Name] = true
+					// Create action (no GVK for generic API calls)
+					spec.Actions = append(spec.Actions, Action{Verb: strings.ToLower(sel.Sel.Name)})
 				}
 			}
 
@@ -1502,7 +2193,10 @@ func analyzeItBlock(itCall *ast.CallExpr, spec *KubeSpec, fset *token.FileSet) {
 
 	// Update spec with discovered patterns
 	for gvk := range gvkSet {
-		spec.Actions = append(spec.Actions, Action{GVK: gvk})
+		spec.Actions = append(spec.Actions, Action{
+			GVK:       gvk,
+			Resources: []string{gvk}, // Populate resources
+		})
 	}
 	for verb := range verbs {
 		// Add verb to existing actions or create new ones
@@ -1783,11 +2477,13 @@ func main() {
 				Dependencies:      []string{},
 				Environment:       []string{},
 				Actions:           []Action{},
-				Expectations:      []map[string]string{},
+				Expectations:      []Expectation{},
 				OpenShiftSpecific: []string{},
 				Concurrency:       []string{},
 				Artifacts:         []string{},
 				Tech:              []string{},
+				Prereq:            []string{}, // Initialize prereq to empty slice
+				Context:           []string{}, // Initialize context to empty slice
 			}
 			// Replace full path with basename in test_id
 			basename := filepath.Base(*root)
@@ -1827,7 +2523,7 @@ func main() {
 					// Check for expectations (assertions)
 					if exps := detectExpectations(x); len(exps) > 0 {
 						for _, exp := range exps {
-							key := fmt.Sprintf("%s:%s", exp["target"], exp["condition"])
+							key := fmt.Sprintf("%s:%s", exp.Target, exp.Condition)
 							expectationsSet[key] = true
 						}
 					}
@@ -1886,13 +2582,20 @@ func main() {
 			if len(gvkSet) > 0 && len(verbs) > 0 {
 				for gvk := range gvkSet {
 					for v := range verbs {
-						spec.Actions = append(spec.Actions, Action{GVK: gvk, Verb: strings.ToLower(v)})
+						spec.Actions = append(spec.Actions, Action{
+							GVK:       gvk,
+							Verb:      strings.ToLower(v),
+							Resources: []string{gvk}, // Populate resources
+						})
 					}
 				}
 			} else if len(gvkSet) > 0 {
 				// Only GVKs, no verbs
 				for gvk := range gvkSet {
-					spec.Actions = append(spec.Actions, Action{GVK: gvk})
+					spec.Actions = append(spec.Actions, Action{
+						GVK:       gvk,
+						Resources: []string{gvk}, // Populate resources
+					})
 				}
 			} else if len(verbs) > 0 {
 				// Only verbs, no GVKs
@@ -1906,14 +2609,17 @@ func main() {
 				spec.OpenShiftSpecific = append(spec.OpenShiftSpecific, k)
 			}
 
-			// Add expectations
+			// Add expectations (from consolidated file-level extraction)
+			// Note: For file-level expectations, we don't have the AST context to extract resources
 			for exp := range expectationsSet {
 				parts := strings.Split(exp, ":")
 				if len(parts) == 2 {
-					spec.Expectations = append(spec.Expectations, map[string]string{
-						"target":    parts[0],
-						"condition": parts[1],
-					})
+					expectation := Expectation{
+						Target:    parts[0],
+						Condition: parts[1],
+						Resources: []string{}, // Resources will be empty for file-level expectations
+					}
+					spec.Expectations = append(spec.Expectations, expectation)
 				}
 			}
 
@@ -1945,11 +2651,41 @@ func main() {
 			spec.BySteps = bySteps
 
 			// Only output if we found meaningful patterns
-			if len(spec.Actions) > 0 || len(spec.OpenShiftSpecific) > 0 || len(spec.Dependencies) > 0 || len(spec.BySteps) > 0 {
+			if len(spec.Actions) > 0 || len(spec.OpenShiftSpecific) > 0 || len(spec.Dependencies) > 0 || len(spec.BySteps) > 0 || len(spec.Expectations) > 0 {
 				// Detect purpose based on test content
 				comments := []string{} // TODO: Extract comments from AST
 				spec.Purpose = detectPurpose(spec.TestID, comments, spec.Actions, spec.Expectations)
 				spec.Tech = detectNetworkingTech(spec.TestID, path, comments)
+
+				// Populate resources for each action (the action's GVK if present)
+				// This was already done above for operations, but ensure all actions have resources
+				for i := range spec.Actions {
+					if spec.Actions[i].GVK != "" && len(spec.Actions[i].Resources) == 0 {
+						spec.Actions[i].Resources = []string{spec.Actions[i].GVK}
+					}
+				}
+
+				// Ensure all expectations have resources field (even if empty)
+				for i := range spec.Expectations {
+					if spec.Expectations[i].Resources == nil {
+						spec.Expectations[i].Resources = []string{}
+					}
+				}
+
+				// Extract prerequisites (unique GVKs from setup phase actions)
+				prereqSet := make(map[string]bool)
+				for _, action := range spec.Actions {
+					if action.Phase == "setup" && action.GVK != "" {
+						prereqSet[action.GVK] = true
+					}
+				}
+				for gvk := range prereqSet {
+					spec.Prereq = append(spec.Prereq, gvk)
+				}
+				// Ensure prereq is always initialized (even if empty)
+				if spec.Prereq == nil {
+					spec.Prereq = []string{}
+				}
 
 				b, _ := json.Marshal(spec)
 				fmt.Fprintln(out, string(b))
@@ -2017,11 +2753,13 @@ func main() {
 				Dependencies:      []string{},
 				Environment:       []string{},
 				Actions:           []Action{},
-				Expectations:      []map[string]string{},
+				Expectations:      []Expectation{},
 				OpenShiftSpecific: []string{},
 				Concurrency:       []string{},
 				Artifacts:         []string{},
 				Tech:              []string{},
+				Prereq:            []string{}, // Initialize prereq to empty slice
+				Context:           []string{}, // Initialize context to empty slice
 			}
 			// Replace full path with basename in test_id
 			basename := filepath.Base(*root)
@@ -2041,7 +2779,10 @@ func main() {
 					// Check for eco-goinfra patterns
 					if gvk, verb := detectEcoGoinfraPattern(x); gvk != "" || verb != "" {
 						if gvk != "" {
-							spec.Actions = append(spec.Actions, Action{GVK: gvk})
+							spec.Actions = append(spec.Actions, Action{
+								GVK:       gvk,
+								Resources: []string{gvk}, // Populate resources
+							})
 							if strings.Contains(gvk, "openshift") || strings.Contains(gvk, "route.openshift.io") {
 								openshiftSet[gvk] = true
 							}
@@ -2064,7 +2805,7 @@ func main() {
 					// Check for expectations (assertions)
 					if exps := detectExpectations(x); len(exps) > 0 {
 						for _, exp := range exps {
-							key := fmt.Sprintf("%s:%s", exp["target"], exp["condition"])
+							key := fmt.Sprintf("%s:%s", exp.Target, exp.Condition)
 							expectationsSet[key] = true
 						}
 					}
@@ -2099,7 +2840,14 @@ func main() {
 				case *ast.CompositeLit:
 					// Check for Kubernetes composite literals
 					if gvk, osh := kindFromCompositeLit(x); gvk != "" {
-						spec.Actions = append(spec.Actions, Action{GVK: gvk})
+						finalGVK := gvk
+						if osh != "" {
+							finalGVK = osh // Use OpenShift-specific GVK if available
+						}
+						spec.Actions = append(spec.Actions, Action{
+							GVK:       finalGVK,
+							Resources: []string{finalGVK}, // Populate resources
+						})
 						if osh != "" {
 							openshiftSet[osh] = true
 						}
@@ -2114,7 +2862,10 @@ func main() {
 
 					// Check for Kubernetes API types in composite literals
 					if gvk := detectK8sTypePattern(x); gvk != "" {
-						spec.Actions = append(spec.Actions, Action{GVK: gvk})
+						spec.Actions = append(spec.Actions, Action{
+							GVK:       gvk,
+							Resources: []string{gvk}, // Populate resources
+						})
 						if strings.Contains(gvk, "openshift") || strings.Contains(gvk, "route.openshift.io") {
 							openshiftSet[gvk] = true
 						}
@@ -2141,13 +2892,20 @@ func main() {
 			if len(gvkSet) > 0 && len(verbs) > 0 {
 				for gvk := range gvkSet {
 					for v := range verbs {
-						spec.Actions = append(spec.Actions, Action{GVK: gvk, Verb: strings.ToLower(v)})
+						spec.Actions = append(spec.Actions, Action{
+							GVK:       gvk,
+							Verb:      strings.ToLower(v),
+							Resources: []string{gvk}, // Populate resources
+						})
 					}
 				}
 			} else if len(gvkSet) > 0 {
 				// Only GVKs, no verbs
 				for gvk := range gvkSet {
-					spec.Actions = append(spec.Actions, Action{GVK: gvk})
+					spec.Actions = append(spec.Actions, Action{
+						GVK:       gvk,
+						Resources: []string{gvk}, // Populate resources
+					})
 				}
 			} else if len(verbs) > 0 {
 				// Only verbs, no GVKs
@@ -2159,14 +2917,17 @@ func main() {
 				spec.OpenShiftSpecific = append(spec.OpenShiftSpecific, k)
 			}
 
-			// Add expectations
+			// Add expectations (from consolidated file-level extraction)
+			// Note: For file-level expectations, we don't have the AST context to extract resources
 			for exp := range expectationsSet {
 				parts := strings.Split(exp, ":")
 				if len(parts) == 2 {
-					spec.Expectations = append(spec.Expectations, map[string]string{
-						"target":    parts[0],
-						"condition": parts[1],
-					})
+					expectation := Expectation{
+						Target:    parts[0],
+						Condition: parts[1],
+						Resources: []string{}, // Resources will be empty for file-level expectations
+					}
+					spec.Expectations = append(spec.Expectations, expectation)
 				}
 			}
 
@@ -2199,8 +2960,37 @@ func main() {
 				spec.Dependencies = append(spec.Dependencies, k)
 			}
 
+			// Populate resources for each action (the action's GVK if present)
+			for i := range spec.Actions {
+				if spec.Actions[i].GVK != "" {
+					spec.Actions[i].Resources = []string{spec.Actions[i].GVK}
+				}
+			}
+
 			// Detect purpose based on test content
 			spec.Purpose = detectPurpose(spec.TestID, comments, spec.Actions, spec.Expectations)
+
+			// Ensure all expectations have resources field (even if empty)
+			for i := range spec.Expectations {
+				if spec.Expectations[i].Resources == nil {
+					spec.Expectations[i].Resources = []string{}
+				}
+			}
+
+			// Extract prerequisites (unique GVKs from setup phase actions)
+			prereqSet := make(map[string]bool)
+			for _, action := range spec.Actions {
+				if action.Phase == "setup" && action.GVK != "" {
+					prereqSet[action.GVK] = true
+				}
+			}
+			for gvk := range prereqSet {
+				spec.Prereq = append(spec.Prereq, gvk)
+			}
+			// Ensure prereq is always initialized (even if empty)
+			if spec.Prereq == nil {
+				spec.Prereq = []string{}
+			}
 
 			b, _ := json.Marshal(spec)
 			fmt.Fprintln(out, string(b))

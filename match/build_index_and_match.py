@@ -262,7 +262,8 @@ def is_tech_compatible(tech_a: List[str], tech_b: List[str]) -> bool:
 
 
 def calculate_functional_similarity(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> float:
-    """Calculate functional similarity score based on test functionality overlap."""
+    """Calculate functional similarity score based on test functionality overlap.
+    Now includes setup and teardown operations from all phases."""
     actions_a = spec_a.get("actions") or []
     actions_b = spec_b.get("actions") or []
     expectations_a = spec_a.get("expectations") or []
@@ -271,23 +272,54 @@ def calculate_functional_similarity(spec_a: Dict[str, Any], spec_b: Dict[str, An
     if not actions_a or not actions_b:
         return 0.0
 
-    # Extract operations and expectations
+    # Extract operations and expectations, including phase information
+    # Include operations from all phases: setup, test, teardown
     operations_a = set()
     operations_b = set()
+    setup_operations_a = set()
+    setup_operations_b = set()
+    test_operations_a = set()
+    test_operations_b = set()
+    teardown_operations_a = set()
+    teardown_operations_b = set()
     expectations_set_a = set()
     expectations_set_b = set()
 
     for action in actions_a:
         gvk = action.get("gvk", "")
-        verb = action.get("verb", "")
+        verb = action.get("verb", "").lower()  # Normalize to lowercase
+        phase = action.get("phase", "test")  # Default to "test" if not set
         if gvk and verb:
-            operations_a.add(f"{gvk}:{verb}")
+            operation_key = f"{gvk}:{verb}"
+            operations_a.add(operation_key)
+            # Also track by phase for weighted similarity
+            if phase == "setup":
+                setup_operations_a.add(operation_key)
+            elif phase == "test":
+                test_operations_a.add(operation_key)
+            elif phase == "teardown":
+                teardown_operations_a.add(operation_key)
+            else:
+                # Default to test operations
+                test_operations_a.add(operation_key)
 
     for action in actions_b:
         gvk = action.get("gvk", "")
-        verb = action.get("verb", "")
+        verb = action.get("verb", "").lower()  # Normalize to lowercase
+        phase = action.get("phase", "test")  # Default to "test" if not set
         if gvk and verb:
-            operations_b.add(f"{gvk}:{verb}")
+            operation_key = f"{gvk}:{verb}"
+            operations_b.add(operation_key)
+            # Also track by phase for weighted similarity
+            if phase == "setup":
+                setup_operations_b.add(operation_key)
+            elif phase == "test":
+                test_operations_b.add(operation_key)
+            elif phase == "teardown":
+                teardown_operations_b.add(operation_key)
+            else:
+                # Default to test operations
+                test_operations_b.add(operation_key)
 
     for exp in expectations_a:
         if isinstance(exp, dict):
@@ -303,77 +335,57 @@ def calculate_functional_similarity(spec_a: Dict[str, Any], spec_b: Dict[str, An
             if target and condition:
                 expectations_set_b.add(f"{target}:{condition}")
 
-    # Calculate similarity scores
-    exact_ops = operations_a & operations_b
-    category_ops = set()
-    resource_ops = set()
+    # Calculate overlap for all operations (setup, test, teardown)
+    common_operations = operations_a & operations_b
+    common_setup = setup_operations_a & setup_operations_b
+    common_test = test_operations_a & test_operations_b
+    common_teardown = teardown_operations_a & teardown_operations_b
+    common_expectations = expectations_set_a & expectations_set_b
 
-    # Category-level operations
-    for action in actions_a:
-        gvk = action.get("gvk", "")
-        verb = action.get("verb", "")
-        if gvk and verb:
-            for cat, verbs in OPERATION_CATEGORIES.items():
-                if verb in verbs:
-                    category_ops.add(f"{gvk}:{cat}")
-                    break
-
-    for action in actions_b:
-        gvk = action.get("gvk", "")
-        verb = action.get("verb", "")
-        if gvk and verb:
-            for cat, verbs in OPERATION_CATEGORIES.items():
-                if verb in verbs:
-                    category_ops.add(f"{gvk}:{cat}")
-                    break
-
-    category_matches = set()
-    for cat_a in category_ops:
-        for cat_b in category_ops:
-            if cat_a == cat_b:
-                category_matches.add(cat_a)
-
-    # Resource-level operations
-    resources_a = set()
-    resources_b = set()
-    for action in actions_a:
-        gvk = action.get("gvk", "")
-        if gvk:
-            resources_a.add(gvk)
-
-    for action in actions_b:
-        gvk = action.get("gvk", "")
-        if gvk:
-            resources_b.add(gvk)
-
-    resource_matches = resources_a & resources_b
-
-    # Calculate weighted similarity score with reduced framework bias
-    exact_score = len(exact_ops) * 1.0
-    category_score = len(category_matches) * 0.7
-    resource_score = len(resource_matches) * 0.3
-    expectation_score = len(expectations_set_a & expectations_set_b) * 0.5
-
-    total_ops = len(operations_a | operations_b)
-    total_expectations = len(expectations_set_a | expectations_set_b)
-
-    if total_ops == 0:
+    # Weighted similarity: operations count more than expectations
+    # Give more weight to test operations, but include setup/teardown
+    if not operations_a or not operations_b:
         return 0.0
 
-    # Apply framework bias reduction
-    framework_penalty = calculate_framework_bias_penalty(spec_a, spec_b)
+    # Calculate overlaps for each phase
+    setup_overlap = (
+        len(common_setup) / max(len(setup_operations_a), len(setup_operations_b))
+        if setup_operations_a or setup_operations_b
+        else 0.0
+    )
+    test_overlap = (
+        len(common_test) / max(len(test_operations_a), len(test_operations_b))
+        if test_operations_a or test_operations_b
+        else 0.0
+    )
+    teardown_overlap = (
+        len(common_teardown) / max(len(teardown_operations_a), len(teardown_operations_b))
+        if teardown_operations_a or teardown_operations_b
+        else 0.0
+    )
+    overall_operation_overlap = len(common_operations) / max(len(operations_a), len(operations_b))
+    expectation_overlap = (
+        len(common_expectations) / max(len(expectations_set_a), len(expectations_set_b))
+        if expectations_set_a or expectations_set_b
+        else 0.0
+    )
 
-    # Apply cross-language penalty
-    cross_language_penalty = calculate_cross_language_penalty(spec_a, spec_b)
+    # Weighted combination:
+    # - 50% overall operations (includes all phases)
+    # - 20% test operations (most important)
+    # - 15% setup operations (important for compatibility)
+    # - 5% teardown operations (less important)
+    # - 10% expectations
+    # Ensure we don't double-count, so we use a combination approach
+    similarity = (
+        0.5 * overall_operation_overlap
+        + 0.2 * test_overlap
+        + 0.15 * setup_overlap
+        + 0.05 * teardown_overlap
+        + 0.1 * expectation_overlap
+    )
 
-    functional_score = (exact_score + category_score + resource_score) / total_ops
-    if total_expectations > 0:
-        functional_score += expectation_score / total_expectations * 0.2
-
-    # Apply both framework and cross-language penalties to reduce false positives
-    functional_score *= (1.0 - framework_penalty) * (1.0 - cross_language_penalty)
-
-    return min(1.0, functional_score)
+    return similarity
 
 
 def calculate_framework_bias_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> float:
@@ -382,6 +394,8 @@ def calculate_framework_bias_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, A
     test_id_b = spec_b.get("test_id", "").lower()
     actions_a = spec_a.get("actions") or []
     actions_b = spec_b.get("actions") or []
+    purpose_a = spec_a.get("purpose", "")
+    purpose_b = spec_b.get("purpose", "")
 
     penalty = 0.0
 
@@ -397,18 +411,33 @@ def calculate_framework_bias_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, A
 
     ops_a = set()
     ops_b = set()
+    ops_with_gvk_a = 0
+    ops_with_gvk_b = 0
 
     for action in actions_a:
         gvk = action.get("gvk", "")
         verb = action.get("verb", "")
         if gvk and verb:
             ops_a.add(f"{gvk}:{verb}")
+            ops_with_gvk_a += 1
 
     for action in actions_b:
         gvk = action.get("gvk", "")
         verb = action.get("verb", "")
         if gvk and verb:
             ops_b.add(f"{gvk}:{verb}")
+            ops_with_gvk_b += 1
+
+    # CRITICAL: Heavy penalty if most operations don't have GVKs (too generic)
+    if len(actions_a) > 0:
+        gvk_ratio_a = ops_with_gvk_a / len(actions_a)
+        if gvk_ratio_a < 0.4:  # Less than 40% of operations have GVKs
+            penalty += 0.3
+
+    if len(actions_b) > 0:
+        gvk_ratio_b = ops_with_gvk_b / len(actions_b)
+        if gvk_ratio_b < 0.4:  # Less than 40% of operations have GVKs
+            penalty += 0.3
 
     # Calculate what percentage of operations are framework-heavy
     shared_ops = ops_a & ops_b
@@ -419,6 +448,42 @@ def calculate_framework_bias_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, A
         # If more than 60% of shared operations are framework operations, apply penalty
         if framework_ratio > 0.6:
             penalty += 0.3 * framework_ratio
+
+    # Additional penalty for RESOURCE_VALIDATION tests that only share generic expectations
+    if purpose_a == "RESOURCE_VALIDATION" and purpose_b == "RESOURCE_VALIDATION":
+        expectations_a = spec_a.get("expectations", [])
+        expectations_b = spec_b.get("expectations", [])
+
+        # Count specific vs generic expectations
+        generic_expectations = {"test_condition"}
+        specific_expectations_a = {
+            exp.get("target", "") if isinstance(exp, dict) else ""
+            for exp in expectations_a
+            if isinstance(exp, dict) and exp.get("target", "") not in generic_expectations
+        }
+        specific_expectations_b = {
+            exp.get("target", "") if isinstance(exp, dict) else ""
+            for exp in expectations_b
+            if isinstance(exp, dict) and exp.get("target", "") not in generic_expectations
+        }
+
+        # If both have mostly generic expectations and they don't share specific ones
+        if not specific_expectations_a and not specific_expectations_b:
+            # Both tests only have generic expectations - check if they validate different things
+            # Check test names for different validation targets
+            test_name_a = test_id_a.split(":")[-1] if ":" in test_id_a else test_id_a
+            test_name_b = test_id_b.split(":")[-1] if ":" in test_id_b else test_id_b
+
+            # If test names suggest different validation targets, apply penalty
+            # This is a heuristic - webhook validation vs event generation are different
+            if ("webhook" in test_name_a or "operator" in test_name_a) and (
+                "event" in test_name_b or "generate" in test_name_b
+            ):
+                penalty += 0.5
+            elif ("event" in test_name_a or "generate" in test_name_a) and (
+                "webhook" in test_name_b or "operator" in test_name_b
+            ):
+                penalty += 0.5
 
     # Additional penalty for webhook tests with different types
     if "webhook" in test_id_a and "webhook" in test_id_b:
@@ -432,6 +497,123 @@ def calculate_framework_bias_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, A
         penalty += 0.5  # Heavy penalty for only sharing framework operations
 
     return min(penalty, 0.8)  # Cap penalty at 80%
+
+
+def calculate_same_file_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> float:
+    """Calculate penalty for tests from the same file that have different test names.
+
+    Tests from the same file that have very different names (e.g., 'generate_events' vs 'deploy_image')
+    likely test different functionality and shouldn't be matched unless they're very similar.
+    """
+    test_id_a = spec_a.get("test_id", "")
+    test_id_b = spec_b.get("test_id", "")
+
+    # Extract file paths
+    file_a = get_file_path_from_test_id(test_id_a)
+    file_b = get_file_path_from_test_id(test_id_b)
+
+    penalty = 0.0
+
+    # Only apply penalty if tests are from the same file
+    if file_a == file_b and file_a:
+        # Extract test names (everything after the last colon)
+        test_name_a = test_id_a.split(":")[-1] if ":" in test_id_a else test_id_a
+        test_name_b = test_id_b.split(":")[-1] if ":" in test_id_b else test_id_b
+
+        # Normalize to lowercase for comparison
+        name_a_lower = test_name_a.lower()
+        name_b_lower = test_name_b.lower()
+
+        # If test names are identical, no penalty (they might be the same test)
+        if name_a_lower == name_b_lower:
+            return 0.0
+
+        # Different keywords that suggest different functionality
+        functional_keywords_a = set()
+        functional_keywords_b = set()
+
+        # Extract meaningful keywords from test names
+        keywords_patterns = [
+            "event",
+            "events",
+            "generate",
+            "generation",
+            "deploy",
+            "deployment",
+            "create",
+            "delete",
+            "remove",
+            "load",
+            "loaded",
+            "module",
+            "modules",
+            "image",
+            "images",
+            "build",
+            "prebuild",
+            "pre-build",
+            "webhook",
+            "webhooks",
+            "operator",
+            "operators",
+            "validate",
+            "validation",
+            "verify",
+            "check",
+            "install",
+            "uninstall",
+            "update",
+            "upgrade",
+            "start",
+            "stop",
+            "run",
+            "execute",
+        ]
+
+        for keyword in keywords_patterns:
+            if keyword in name_a_lower:
+                functional_keywords_a.add(keyword)
+            if keyword in name_b_lower:
+                functional_keywords_b.add(keyword)
+
+        # If test names have no shared functional keywords, they're likely testing different things
+        shared_keywords = functional_keywords_a & functional_keywords_b
+
+        if not shared_keywords and (functional_keywords_a or functional_keywords_b):
+            # No shared keywords suggests very different functionality
+            penalty += 0.4
+
+            # Additional penalty if they're testing completely different things
+            # e.g., "generate_events" vs "deploy_image"
+            event_related = any(
+                kw in functional_keywords_a for kw in ["event", "events", "generate", "generation"]
+            )
+            deployment_related = any(
+                kw in functional_keywords_a
+                for kw in ["deploy", "deployment", "image", "build", "prebuild"]
+            )
+            event_related_b = any(
+                kw in functional_keywords_b for kw in ["event", "events", "generate", "generation"]
+            )
+            deployment_related_b = any(
+                kw in functional_keywords_b
+                for kw in ["deploy", "deployment", "image", "build", "prebuild"]
+            )
+
+            if (event_related and deployment_related_b) or (deployment_related and event_related_b):
+                # One is about events, the other about deployment - very different
+                penalty += 0.3
+
+        elif shared_keywords:
+            # Some shared keywords - smaller penalty based on how different they are
+            unique_a = functional_keywords_a - functional_keywords_b
+            unique_b = functional_keywords_b - functional_keywords_a
+
+            if len(unique_a) > 2 or len(unique_b) > 2:
+                # Many unique keywords suggests different functionality
+                penalty += 0.2
+
+    return min(penalty, 0.7)  # Cap penalty at 70%
 
 
 def calculate_cross_language_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) -> float:
@@ -957,22 +1139,58 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
         for dep in dependencies:
             parts.append(f"  - {dep}")
 
-    # Operations section with structure
+    # Operations section with structure, grouped by phase
     actions = spec.get("actions") or []
     if actions:
-        parts.append("OPERATIONS:")
-        for action in actions:
-            gvk = action.get("gvk", "")
-            kind_hint = (action.get("fields") or {}).get("kind_hint", "")
-            verb = action.get("verb", "")
-            if gvk and kind_hint and "/" not in gvk:
-                gvk = f"{gvk}/{kind_hint}"
-            if gvk and verb:
-                parts.append(f"  - {gvk}:{verb}")
-            elif gvk:
-                parts.append(f"  - {gvk}")
-            elif verb:
-                parts.append(f"  - verb:{verb}")
+        # Group actions by phase for better representation
+        setup_actions = [a for a in actions if a.get("phase") == "setup"]
+        test_actions = [a for a in actions if a.get("phase") == "test" or not a.get("phase")]
+        teardown_actions = [a for a in actions if a.get("phase") == "teardown"]
+
+        if setup_actions:
+            parts.append("SETUP_OPERATIONS:")
+            for action in setup_actions:
+                gvk = action.get("gvk", "")
+                kind_hint = (action.get("fields") or {}).get("kind_hint", "")
+                verb = action.get("verb", "").lower()  # Normalize to lowercase
+                if gvk and kind_hint and "/" not in gvk:
+                    gvk = f"{gvk}/{kind_hint}"
+                if gvk and verb:
+                    parts.append(f"  - {gvk}:{verb}")
+                elif gvk:
+                    parts.append(f"  - {gvk}")
+                elif verb:
+                    parts.append(f"  - verb:{verb}")
+
+        if test_actions:
+            parts.append("OPERATIONS:")
+            for action in test_actions:
+                gvk = action.get("gvk", "")
+                kind_hint = (action.get("fields") or {}).get("kind_hint", "")
+                verb = action.get("verb", "").lower()  # Normalize to lowercase
+                if gvk and kind_hint and "/" not in gvk:
+                    gvk = f"{gvk}/{kind_hint}"
+                if gvk and verb:
+                    parts.append(f"  - {gvk}:{verb}")
+                elif gvk:
+                    parts.append(f"  - {gvk}")
+                elif verb:
+                    parts.append(f"  - verb:{verb}")
+
+        if teardown_actions:
+            parts.append("TEARDOWN_OPERATIONS:")
+            for action in teardown_actions:
+                gvk = action.get("gvk", "")
+                kind_hint = (action.get("fields") or {}).get("kind_hint", "")
+                verb = action.get("verb", "").lower()  # Normalize to lowercase
+                if gvk and kind_hint and "/" not in gvk:
+                    gvk = f"{gvk}/{kind_hint}"
+                if gvk and verb:
+                    parts.append(f"  - {gvk}:{verb}")
+                elif gvk:
+                    parts.append(f"  - {gvk}")
+                elif verb:
+                    parts.append(f"  - verb:{verb}")
 
     # Expectations section
     expectations = spec.get("expectations") or []
@@ -1038,6 +1256,20 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
                 step_type = step.get("type", "")
                 if step_type:
                     parts.append(f"    - type:{step_type}")
+
+    # Prerequisites section (resources created in setup phase)
+    prereq = spec.get("prereq", [])
+    if prereq:
+        parts.append("PREREQUISITES:")
+        for p in prereq:
+            parts.append(f"  - {p}")
+
+    # Context section (language-agnostic test context hierarchy)
+    context = spec.get("context", [])
+    if context:
+        parts.append("CONTEXT:")
+        for c in context:
+            parts.append(f"  - {c}")
 
     return "\n".join(parts)
 
@@ -1123,12 +1355,46 @@ def get_verb_group_tokens(s: Dict[str, Any]) -> Set[str]:
 
 
 def get_resources_from_spec(spec: Dict[str, Any]) -> List[str]:
-    """Extract unique resource types (GVKs) from a spec."""
+    """Extract unique resource types (GVKs) from a spec.
+    Resources are extracted from:
+    1. prereq - resources created in setup phase
+    2. actions - resources from all actions
+    3. expectations - resources from expectations
+    """
     resources = set()
+
+    # 1. Add resources from prereq (setup phase resources)
+    prereq = spec.get("prereq", [])
+    if isinstance(prereq, list):
+        for gvk in prereq:
+            if gvk:
+                resources.add(gvk)
+
+    # 2. Add resources from actions
     actions = spec.get("actions", [])
     for action in actions:
-        if isinstance(action, dict) and "gvk" in action:
-            resources.add(action["gvk"])
+        if isinstance(action, dict):
+            # Add GVK from action
+            gvk = action.get("gvk", "")
+            if gvk:
+                resources.add(gvk)
+            # Also check resources field in action (if present)
+            action_resources = action.get("resources", [])
+            if isinstance(action_resources, list):
+                for res in action_resources:
+                    if res:
+                        resources.add(res)
+
+    # 3. Add resources from expectations
+    expectations = spec.get("expectations", [])
+    for expectation in expectations:
+        if isinstance(expectation, dict):
+            exp_resources = expectation.get("resources", [])
+            if isinstance(exp_resources, list):
+                for res in exp_resources:
+                    if res:
+                        resources.add(res)
+
     return list(resources)
 
 
@@ -1295,7 +1561,20 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
 
             # Apply context-aware filtering
             context_penalty = calculate_context_penalty(specs_a[i], specs_b[j])
-            final_score = boosted_score * (1.0 - context_penalty)
+
+            # Apply framework bias penalty for generic operations and false positives
+            framework_penalty = calculate_framework_bias_penalty(specs_a[i], specs_b[j])
+
+            # Apply same-file penalty for tests from the same file with different names
+            same_file_penalty = calculate_same_file_penalty(specs_a[i], specs_b[j])
+
+            # Combine penalties (multiplicative for context, framework bias, and same-file)
+            final_score = (
+                boosted_score
+                * (1.0 - context_penalty)
+                * (1.0 - framework_penalty)
+                * (1.0 - same_file_penalty)
+            )
 
             # Apply higher threshold for cross-language matches
             if lang_a != lang_b:

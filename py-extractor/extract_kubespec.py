@@ -290,6 +290,83 @@ def detect_test_type(test_name: str, file_path: str, docstring: str) -> str:
     return detected_type
 
 
+def camelcase_to_words(name: str) -> str:
+    """Convert camelCase or PascalCase to words with spaces."""
+    # Remove leading Test/test prefix if present
+    name = re.sub(r"^(Test|test)", "", name)
+    # Insert space before uppercase letters
+    name = re.sub(r"([a-z])([A-Z])", r"\1 \2", name)
+    # Convert to title case and return
+    return name.strip()
+
+
+def extract_context_from_function_name(func_name: str) -> list:
+    """Extract context from test function name.
+    Handles patterns like:
+    - test_when_pod_running -> ["pod running"]
+    - test_given_resource_exists -> ["resource exists"]
+    - test_then_it_should_work -> ["it should work"]
+    """
+    context = []
+    # Remove test/test_ prefix
+    name = re.sub(r"^test_?", "", func_name.lower())
+    # Split on underscores
+    parts = name.split("_")
+    
+    # Look for BDD keywords (when, given, then, and, but)
+    bdd_keywords = {"when", "given", "then", "and", "but"}
+    found_keyword = False
+    start_idx = 0
+    
+    for i, part in enumerate(parts):
+        if part in bdd_keywords:
+            # Found a BDD keyword - extract the description after it
+            if i + 1 < len(parts):
+                desc_parts = parts[i + 1 :]
+                if desc_parts:
+                    desc = " ".join(desc_parts)
+                    if desc:
+                        context.append(desc)
+                        found_keyword = True
+            break
+    
+    # If no BDD keyword found, use the whole name (without test prefix) as context
+    if not found_keyword and name:
+        # Skip common test suffixes
+        name = re.sub(r"_(test|spec|should)$", "", name)
+        if name:
+            context.append(name.replace("_", " "))
+    
+    return context
+
+
+def extract_context_from_decorators(decorator_list: list) -> list:
+    """Extract context from pytest decorators and BDD markers."""
+    context = []
+    for decorator in decorator_list:
+        if isinstance(decorator, ast.Call):
+            # Check for @pytest.mark.when("...") or @when("...")
+            func = decorator.func
+            if isinstance(func, ast.Attribute):
+                if func.attr in ["when", "given", "then"]:
+                    # Extract description from decorator argument
+                    if decorator.args:
+                        for arg in decorator.args:
+                            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                                context.append(arg.value)
+                            elif isinstance(arg, ast.Str):  # Python < 3.8
+                                context.append(arg.s)
+            elif isinstance(func, ast.Name):
+                if func.id in ["when", "given", "then"]:
+                    if decorator.args:
+                        for arg in decorator.args:
+                            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                                context.append(arg.value)
+                            elif isinstance(arg, ast.Str):  # Python < 3.8
+                                context.append(arg.s)
+    return context
+
+
 def detect_dependencies(test_name: str, file_path: str, docstring: str, actions: list) -> list:
     """Detect required dependencies based on test content"""
     content = (test_name + " " + file_path + " " + (docstring or "")).lower()
@@ -689,6 +766,46 @@ def detect_tech(test_name: str, file_path: str, docstring: str) -> list:
     return tech
 
 
+def extract_resources_from_expectation(assert_node: ast.Assert) -> list:
+    """Extract GVKs mentioned in an expectation condition"""
+    resources = []
+    if not assert_node.test:
+        return resources
+
+    def ast_to_string(node):
+        if hasattr(ast, "unparse"):
+            return ast.unparse(node)
+        else:
+            return str(node)
+
+    condition_str = ast_to_string(assert_node.test).lower()
+
+    # Common resource patterns in expectations
+    resource_patterns = {
+        "pod": "v1/Pod",
+        "deployment": "apps/v1/Deployment",
+        "service": "v1/Service",
+        "namespace": "v1/Namespace",
+        "route": "route.openshift.io/v1/Route",
+        "ingress": "networking.k8s.io/v1/Ingress",
+        "configmap": "v1/ConfigMap",
+        "secret": "v1/Secret",
+        "node": "v1/Node",
+        "cluster": "config.openshift.io/v1/ClusterVersion",
+        "baremetalhost": "metal3.io/v1alpha1/BareMetalHost",
+        "pvc": "v1/PersistentVolumeClaim",
+        "pv": "v1/PersistentVolume",
+        "operator": "operators.coreos.com/v1alpha1/ClusterServiceVersion",
+        "subscription": "operators.coreos.com/v1alpha1/Subscription",
+    }
+
+    for keyword, gvk in resource_patterns.items():
+        if keyword in condition_str:
+            resources.append(gvk)
+
+    return sorted(list(set(resources)))  # Remove duplicates and sort
+
+
 def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
     """Extract meaningful expectation information from assert statements"""
     if not assert_node.test:
@@ -900,8 +1017,20 @@ class TestVisitor(ast.NodeVisitor):
         self.specs = []
         self.imports = {}  # Track imports for cross-file detection
         self.imported_modules = set()  # Track imported modules
+        self.fixtures = {}  # Track fixtures: {fixture_name: operations}
+        self.class_setup_ops = {}  # Track class-level setup: {class_name: operations}
+        self.class_teardown_ops = {}  # Track class-level teardown: {class_name: operations}
+        self.current_class = None  # Track current class being processed
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
+        # First, check if this is a pytest fixture (not a test function)
+        if is_pytest_fixture(node):
+            # Extract operations from fixture and store them
+            fixture_name = node.name
+            operations = find_operations_in_fixture(node)
+            self.fixtures[fixture_name] = operations
+            return  # Don't process as a test function
+
         # Enhanced test function detection patterns
         is_test_function = (
             node.name.startswith("test")  # pytest style
@@ -952,6 +1081,37 @@ class TestVisitor(ast.NodeVisitor):
         # Create test_id with basename substitution
         basename = os.path.basename(self.root_path)
         relative_path = os.path.relpath(self.path, self.root_path)
+        
+        # Extract context from various sources
+        context = []
+        # 1. Extract from class name if test is in a class
+        if self.current_class:
+            class_context = camelcase_to_words(self.current_class)
+            if class_context:
+                context.append(class_context)
+        
+        # 2. Extract from function name (handles test_when_* patterns)
+        func_context = extract_context_from_function_name(node.name)
+        context.extend(func_context)
+        
+        # 3. Extract from decorators (BDD markers, pytest markers)
+        decorator_context = extract_context_from_decorators(node.decorator_list)
+        context.extend(decorator_context)
+        
+        # 4. Extract from docstring if it describes context
+        docstring = ast.get_docstring(node)
+        if docstring:
+            # Look for context-like descriptions in docstring
+            docstring_lower = docstring.lower()
+            if "when" in docstring_lower or "given" in docstring_lower:
+                # Try to extract context from docstring
+                # Simple extraction: look for "When X" or "Given X" patterns
+                when_match = re.search(r"(?i)(?:when|given|then)\s+(.+?)(?:\.|$|\n)", docstring)
+                if when_match:
+                    context_desc = when_match.group(1).strip()
+                    if context_desc:
+                        context.append(context_desc)
+        
         spec = {
             "test_id": f"{basename}/{relative_path}:{node.name}",
             "test_type": "unknown",
@@ -965,12 +1125,52 @@ class TestVisitor(ast.NodeVisitor):
             "purpose": "",
             "tech": [],
             "by_steps": [],  # Track operations in By(...) steps
+            "prereq": [],  # Prerequisites: resources created in setup phase (unique GVKs from setup actions)
+            "context": context,  # Context hierarchy (language-agnostic, no framework prefixes) - always present
         }
+
+        # Tag test body operations with "test" phase
+        # This will be set when we add actions
         for dec in node.decorator_list:
             if isinstance(dec, ast.Call) and getattr(dec.func, "attr", "") == "parametrize":
                 spec["dependencies"].append("parametrized")
+
+        # Collect setup operations from fixtures used by this test
+        # Check if test uses fixtures via decorators or function parameters
+        setup_ops_from_fixtures = []
+        for dec in node.decorator_list:
+            # Check for @pytest.mark.usefixtures("fixture_name")
+            if isinstance(dec, ast.Call):
+                func = dec.func
+                if isinstance(func, ast.Attribute) and func.attr == "usefixtures":
+                    if dec.args:
+                        for arg in dec.args:
+                            if isinstance(arg, ast.Constant):
+                                fixture_name = arg.value
+                                if fixture_name in self.fixtures:
+                                    setup_ops_from_fixtures.extend(self.fixtures[fixture_name])
+
+        # Check function parameters for fixture names (common pytest pattern)
+        for arg in node.args.args:
+            if arg.arg in self.fixtures:
+                setup_ops_from_fixtures.extend(self.fixtures[arg.arg])
+
+        # Collect class-level setup operations if test is in a class
+        if self.current_class:
+            class_setup_ops = self.class_setup_ops.get(self.current_class, [])
+            class_teardown_ops = self.class_teardown_ops.get(self.current_class, [])
+            setup_ops_from_fixtures.extend(class_setup_ops)
+            # Note: teardown will be added later
+
+        # Add setup operations first
+        spec["actions"].extend(setup_ops_from_fixtures)
+
         # First, detect cross-file actions
         cross_file_actions = self.detect_cross_file_actions(node)
+        # Tag cross-file actions as test phase
+        for action in cross_file_actions:
+            if "phase" not in action:
+                action["phase"] = "test"
         spec["actions"].extend(cross_file_actions)
 
         for n in ast.walk(node):
@@ -987,13 +1187,25 @@ class TestVisitor(ast.NodeVisitor):
                 ]:
                     if func.id == "get_namespaces":
                         # get_namespaces() -> v1/Namespace:list
-                        spec["actions"].append({"gvk": "v1/Namespace", "verb": "list"})
+                        verb = "list"
+                        gvk = "v1/Namespace"
+                        action = {
+                            "gvk": gvk,
+                            "verb": verb.lower(),
+                            "phase": "test",
+                            "resources": [gvk],
+                        }
+                        spec["actions"].append(action)
                     elif func.id == "create_api_object":
                         # create_api_object() -> generic create operation
-                        spec["actions"].append({"gvk": "unknown/unknown", "verb": "create"})
+                        verb = "create"
+                        action = {"gvk": "unknown/unknown", "verb": verb.lower(), "phase": "test"}
+                        spec["actions"].append(action)
                     elif func.id == "delete_object":
                         # delete_object() -> generic delete operation
-                        spec["actions"].append({"gvk": "unknown/unknown", "verb": "delete"})
+                        verb = "delete"
+                        action = {"gvk": "unknown/unknown", "verb": verb.lower(), "phase": "test"}
+                        spec["actions"].append(action)
                     elif func.id in ["get_resource", "get_resource_from_namespace"]:
                         if n.args and isinstance(n.args[0], ast.Constant):
                             resource_name = n.args[0].value
@@ -1001,11 +1213,22 @@ class TestVisitor(ast.NodeVisitor):
                             if gvk:
                                 # Determine verb based on function name and arguments
                                 verb = "list" if func.id == "get_resource" else "get"
-                                spec["actions"].append({"gvk": gvk, "verb": verb})
+                                action = {
+                                    "gvk": gvk,
+                                    "verb": verb.lower(),
+                                    "phase": "test",
+                                    "resources": [gvk],
+                                }
+                                spec["actions"].append(action)
                         elif n.args:
                             # For any arguments (including variables), add a generic action
                             verb = "list" if func.id == "get_resource" else "get"
-                            spec["actions"].append({"gvk": "unknown/unknown", "verb": verb})
+                            action = {
+                                "gvk": "unknown/unknown",
+                                "verb": verb.lower(),
+                                "phase": "test",
+                            }
+                            spec["actions"].append(action)
 
                 # Check for attribute-based calls
                 elif isinstance(func, ast.Attribute):
@@ -1013,14 +1236,18 @@ class TestVisitor(ast.NodeVisitor):
                     low = mname.lower()
                     if low.startswith(VERB_PREFIXES):
                         verb = low.split("_", 1)[0]
+                        verb = verb.lower().replace("read", "get")  # Ensure lowercase
                         kind = low.split("_")[-1]
-                        spec["actions"].append(
-                            {
-                                "gvk": guess_gvk_from_attr(func),
-                                "verb": verb.replace("read", "get"),
-                                "fields": {"kind_hint": kind.capitalize()},
-                            }
-                        )
+                        gvk = guess_gvk_from_attr(func)
+                        action = {
+                            "gvk": gvk,
+                            "verb": verb,
+                            "fields": {"kind_hint": kind.capitalize()},
+                            "phase": "test",
+                        }
+                        if gvk:
+                            action["resources"] = [gvk]
+                        spec["actions"].append(action)
 
                     # Check for openshift library patterns
                     if isinstance(func.value, ast.Name) and func.value.id == "oc":
@@ -1029,8 +1256,14 @@ class TestVisitor(ast.NodeVisitor):
                             if n.args and isinstance(n.args[0], ast.Constant):
                                 resource_name = n.args[0].value
                                 gvk = map_resource_name_to_gvk(resource_name)
-                                if gvk:
-                                    spec["actions"].append({"gvk": gvk, "verb": "get"})
+                            if gvk:
+                                action = {
+                                    "gvk": gvk,
+                                    "verb": "get",
+                                    "phase": "test",
+                                    "resources": [gvk],
+                                }
+                                spec["actions"].append(action)
 
                     # Check for imported helper function calls
                     if func.attr in [
@@ -1042,13 +1275,22 @@ class TestVisitor(ast.NodeVisitor):
                     ]:
                         if func.attr == "get_namespaces":
                             # get_namespaces() -> v1/Namespace:list
-                            spec["actions"].append({"gvk": "v1/Namespace", "verb": "list"})
+                            gvk = "v1/Namespace"
+                            action = {
+                                "gvk": gvk,
+                                "verb": "list",
+                                "phase": "test",
+                                "resources": [gvk],
+                            }
+                            spec["actions"].append(action)
                         elif func.attr == "create_api_object":
                             # create_api_object() -> generic create operation
-                            spec["actions"].append({"gvk": "unknown/unknown", "verb": "create"})
+                            action = {"gvk": "unknown/unknown", "verb": "create", "phase": "test"}
+                            spec["actions"].append(action)
                         elif func.attr == "delete_object":
                             # delete_object() -> generic delete operation
-                            spec["actions"].append({"gvk": "unknown/unknown", "verb": "delete"})
+                            action = {"gvk": "unknown/unknown", "verb": "delete", "phase": "test"}
+                            spec["actions"].append(action)
                         elif func.attr in [
                             "get_resource",
                             "get_resource_from_namespace",
@@ -1059,11 +1301,22 @@ class TestVisitor(ast.NodeVisitor):
                                 if gvk:
                                     # Determine verb based on function name
                                     verb = "list" if func.attr == "get_resource" else "get"
-                                    spec["actions"].append({"gvk": gvk, "verb": verb})
+                                    action = {
+                                        "gvk": gvk,
+                                        "verb": verb.lower(),
+                                        "phase": "test",
+                                        "resources": [gvk],
+                                    }
+                                    spec["actions"].append(action)
                             elif n.args:
                                 # For any arguments (including variables), add a generic action
                                 verb = "list" if func.attr == "get_resource" else "get"
-                                spec["actions"].append({"gvk": "unknown/unknown", "verb": verb})
+                                action = {
+                                    "gvk": "unknown/unknown",
+                                    "verb": verb.lower(),
+                                    "phase": "test",
+                                }
+                                spec["actions"].append(action)
                 if isinstance(func, ast.Attribute) and func.attr in {
                     "run",
                     "check_call",
@@ -1084,7 +1337,13 @@ class TestVisitor(ast.NodeVisitor):
                             low = cmd.lower()
                             gvk, verb = map_command_to_api(cmd, low)
                             if gvk and verb:
-                                spec["actions"].append({"gvk": gvk, "verb": verb})
+                                action = {
+                                    "gvk": gvk,
+                                    "verb": verb.lower(),
+                                    "phase": "test",
+                                    "resources": [gvk],
+                                }
+                                spec["actions"].append(action)
 
                             # Handle PSA labels
                             if (" label " in low and " ns " in low) and any(
@@ -1111,18 +1370,22 @@ class TestVisitor(ast.NodeVisitor):
             if isinstance(n, ast.Assert):
                 expectation = extract_assertion_expectation(n)
                 if expectation:
+                    # Add resources field to expectation
+                    expectation["resources"] = extract_resources_from_expectation(n)
                     spec["expectations"].append(expectation)
         for n in ast.walk(node):
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
                 low = (n.func.attr or "").lower()
                 if "ingress" in low:
                     verb = low.split("_", 1)[0]
-                    spec["actions"].append(
-                        {
-                            "gvk": "networking.k8s.io/v1/Ingress",
-                            "verb": verb.replace("read", "get"),
-                        }
-                    )
+                    gvk = "networking.k8s.io/v1/Ingress"
+                    action = {
+                        "gvk": gvk,
+                        "verb": verb.lower().replace("read", "get"),
+                        "phase": "test",
+                        "resources": [gvk],
+                    }
+                    spec["actions"].append(action)
 
         if any(
             a.get("verb") in {"create", "delete", "patch", "replace", "watch"}
@@ -1163,6 +1426,30 @@ class TestVisitor(ast.NodeVisitor):
             step_patterns = analyze_step_patterns_in_file(node)
             spec["by_steps"] = step_patterns
 
+        # Add class-level teardown operations if test is in a class
+        if self.current_class:
+            class_teardown_ops = self.class_teardown_ops.get(self.current_class, [])
+            spec["actions"].extend(class_teardown_ops)
+
+        # Ensure all operations have a phase tag (default to "test" if not set)
+        for action in spec["actions"]:
+            if "phase" not in action:
+                action["phase"] = "test"
+
+        # Ensure all expectations have resources field (even if empty)
+        for expectation in spec["expectations"]:
+            if isinstance(expectation, dict) and "resources" not in expectation:
+                expectation["resources"] = []
+
+        # Extract prerequisites (unique GVKs from setup phase actions)
+        prereq_set = set()
+        for action in spec["actions"]:
+            if isinstance(action, dict) and action.get("phase") == "setup":
+                gvk = action.get("gvk", "")
+                if gvk:
+                    prereq_set.add(gvk)
+        spec["prereq"] = sorted(list(prereq_set))  # Always present, even if empty
+
         # Detect purpose based on test content
         spec["purpose"] = detect_purpose(
             node.name, docstring, spec["actions"], spec["expectations"]
@@ -1190,8 +1477,47 @@ class TestVisitor(ast.NodeVisitor):
             )  # unittest.TestCase
         )
 
+        # Track fixtures and setup/teardown methods in this class
+        # First, collect class-level setup/teardown operations
+        class_setup_ops = []
+        class_teardown_ops = []
+        fixtures_in_class = {}
+
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef):
+                # Check for pytest fixtures
+                if is_pytest_fixture(item):
+                    fixture_name = item.name
+                    operations = find_operations_in_fixture(item)
+                    fixtures_in_class[fixture_name] = operations
+                    # Also add to global fixtures dict
+                    self.fixtures[fixture_name] = operations
+                # Check for setup/teardown methods
+                elif is_setup_method(item):
+                    ops = find_operations_in_setup_method(item)
+                    class_setup_ops.extend(ops)
+                elif is_teardown_method(item):
+                    ops = find_operations_in_teardown_method(item)
+                    class_teardown_ops.extend(ops)
+                elif is_setup_class(item):
+                    ops = find_operations_in_setup_method(item)  # Same extraction logic
+                    class_setup_ops.extend(ops)
+                elif is_teardown_class(item):
+                    ops = find_operations_in_teardown_method(item)  # Same extraction logic
+                    class_teardown_ops.extend(ops)
+
+        # Store class-level setup/teardown operations
+        if class_setup_ops:
+            self.class_setup_ops[node.name] = class_setup_ops
+        if class_teardown_ops:
+            self.class_teardown_ops[node.name] = class_teardown_ops
+
         if not is_test_class:
             return
+
+        # Set current class context for test methods
+        old_class = self.current_class
+        self.current_class = node.name
 
         # Process test methods in the class
         for item in node.body:
@@ -1199,6 +1525,37 @@ class TestVisitor(ast.NodeVisitor):
                 # Create test_id with basename substitution
                 basename = os.path.basename(self.root_path)
                 relative_path = os.path.relpath(self.path, self.root_path)
+                
+                # Extract context from various sources
+                context = []
+                # 1. Extract from class name
+                if self.current_class:
+                    class_context = camelcase_to_words(self.current_class)
+                    if class_context:
+                        context.append(class_context)
+                
+                # 2. Extract from function name (handles test_when_* patterns)
+                func_context = extract_context_from_function_name(item.name)
+                context.extend(func_context)
+                
+                # 3. Extract from decorators (BDD markers, pytest markers)
+                decorator_context = extract_context_from_decorators(item.decorator_list)
+                context.extend(decorator_context)
+                
+                # 4. Extract from docstring if it describes context
+                docstring = ast.get_docstring(item)
+                if docstring:
+                    # Look for context-like descriptions in docstring
+                    docstring_lower = docstring.lower()
+                    if "when" in docstring_lower or "given" in docstring_lower:
+                        # Try to extract context from docstring
+                        # Simple extraction: look for "When X" or "Given X" patterns
+                        when_match = re.search(r"(?i)(?:when|given|then)\s+(.+?)(?:\.|$|\n)", docstring)
+                        if when_match:
+                            context_desc = when_match.group(1).strip()
+                            if context_desc:
+                                context.append(context_desc)
+                
                 spec = {
                     "test_id": f"{basename}/{relative_path}:{node.name}.{item.name}",
                     "test_type": "unit",  # Class-based tests are typically unit tests
@@ -1212,6 +1569,8 @@ class TestVisitor(ast.NodeVisitor):
                     "purpose": "",
                     "tech": [],
                     "by_steps": [],  # Track operations in By(...) steps
+                    "prereq": [],  # Prerequisites: resources created in setup phase (unique GVKs from setup actions)
+                    "context": context,  # Context hierarchy (language-agnostic, no framework prefixes) - always present
                 }
 
                 # Extract docstring
@@ -1228,9 +1587,31 @@ class TestVisitor(ast.NodeVisitor):
                 spec["dependencies"] = detect_dependencies(item.name, self.path, docstring)
                 spec["environment"] = detect_environment(item.name, self.path, docstring)
 
+                # Collect setup operations from class-level setup and fixtures
+                setup_ops_from_class = []
+                if self.current_class:
+                    class_setup_ops = self.class_setup_ops.get(self.current_class, [])
+                    class_teardown_ops = self.class_teardown_ops.get(self.current_class, [])
+                    setup_ops_from_class.extend(class_setup_ops)
+                    # Teardown will be added later
+
+                # Collect setup operations from fixtures used by this test method
+                setup_ops_from_fixtures = []
+                for arg in item.args.args:
+                    if arg.arg in self.fixtures:
+                        setup_ops_from_fixtures.extend(self.fixtures[arg.arg])
+
+                # Add setup operations first
+                spec["actions"].extend(setup_ops_from_class)
+                spec["actions"].extend(setup_ops_from_fixtures)
+
                 # Process function body for actions and expectations
                 # First, detect cross-file actions
                 cross_file_actions = self.detect_cross_file_actions(item)
+                # Tag cross-file actions as test phase
+                for action in cross_file_actions:
+                    if "phase" not in action:
+                        action["phase"] = "test"
                 spec["actions"].extend(cross_file_actions)
 
                 for n in ast.walk(item):
@@ -1244,11 +1625,28 @@ class TestVisitor(ast.NodeVisitor):
                             "delete_object",
                         ]:
                             if n.func.id == "get_namespaces":
-                                spec["actions"].append({"gvk": "v1/Namespace", "verb": "list"})
+                                gvk = "v1/Namespace"
+                                action = {
+                                    "gvk": gvk,
+                                    "verb": "list",
+                                    "phase": "test",
+                                    "resources": [gvk],
+                                }
+                                spec["actions"].append(action)
                             elif n.func.id == "create_api_object":
-                                spec["actions"].append({"gvk": "unknown/unknown", "verb": "create"})
+                                action = {
+                                    "gvk": "unknown/unknown",
+                                    "verb": "create",
+                                    "phase": "test",
+                                }
+                                spec["actions"].append(action)
                             elif n.func.id == "delete_object":
-                                spec["actions"].append({"gvk": "unknown/unknown", "verb": "delete"})
+                                action = {
+                                    "gvk": "unknown/unknown",
+                                    "verb": "delete",
+                                    "phase": "test",
+                                }
+                                spec["actions"].append(action)
                             elif n.func.id in [
                                 "get_resource",
                                 "get_resource_from_namespace",
@@ -1258,10 +1656,21 @@ class TestVisitor(ast.NodeVisitor):
                                     gvk = map_resource_name_to_gvk(resource_name)
                                     if gvk:
                                         verb = "list" if n.func.id == "get_resource" else "get"
-                                        spec["actions"].append({"gvk": gvk, "verb": verb})
+                                        action = {
+                                            "gvk": gvk,
+                                            "verb": verb.lower(),
+                                            "phase": "test",
+                                            "resources": [gvk],
+                                        }
+                                        spec["actions"].append(action)
                                 elif n.args:
                                     verb = "list" if n.func.id == "get_resource" else "get"
-                                    spec["actions"].append({"gvk": "unknown/unknown", "verb": verb})
+                                    action = {
+                                        "gvk": "unknown/unknown",
+                                        "verb": verb.lower(),
+                                        "phase": "test",
+                                    }
+                                    spec["actions"].append(action)
                         # Check for imported helper function calls (e.g., oc_helpers.get_resource)
                         elif isinstance(n.func, ast.Attribute) and n.func.attr in [
                             "get_resource",
@@ -1271,11 +1680,28 @@ class TestVisitor(ast.NodeVisitor):
                             "delete_object",
                         ]:
                             if n.func.attr == "get_namespaces":
-                                spec["actions"].append({"gvk": "v1/Namespace", "verb": "list"})
+                                gvk = "v1/Namespace"
+                                action = {
+                                    "gvk": gvk,
+                                    "verb": "list",
+                                    "phase": "test",
+                                    "resources": [gvk],
+                                }
+                                spec["actions"].append(action)
                             elif n.func.attr == "create_api_object":
-                                spec["actions"].append({"gvk": "unknown/unknown", "verb": "create"})
+                                action = {
+                                    "gvk": "unknown/unknown",
+                                    "verb": "create",
+                                    "phase": "test",
+                                }
+                                spec["actions"].append(action)
                             elif n.func.attr == "delete_object":
-                                spec["actions"].append({"gvk": "unknown/unknown", "verb": "delete"})
+                                action = {
+                                    "gvk": "unknown/unknown",
+                                    "verb": "delete",
+                                    "phase": "test",
+                                }
+                                spec["actions"].append(action)
                             elif n.func.attr in [
                                 "get_resource",
                                 "get_resource_from_namespace",
@@ -1285,10 +1711,21 @@ class TestVisitor(ast.NodeVisitor):
                                     gvk = map_resource_name_to_gvk(resource_name)
                                     if gvk:
                                         verb = "list" if n.func.attr == "get_resource" else "get"
-                                        spec["actions"].append({"gvk": gvk, "verb": verb})
+                                        action = {
+                                            "gvk": gvk,
+                                            "verb": verb.lower(),
+                                            "phase": "test",
+                                            "resources": [gvk],
+                                        }
+                                        spec["actions"].append(action)
                                 elif n.args:
                                     verb = "list" if n.func.attr == "get_resource" else "get"
-                                    spec["actions"].append({"gvk": "unknown/unknown", "verb": verb})
+                                    action = {
+                                        "gvk": "unknown/unknown",
+                                        "verb": verb.lower(),
+                                        "phase": "test",
+                                    }
+                                    spec["actions"].append(action)
                         # Check for subprocess calls (CLI commands)
                         elif isinstance(n.func, ast.Attribute) and n.func.attr == "run":
                             if (
@@ -1304,10 +1741,18 @@ class TestVisitor(ast.NodeVisitor):
                                         cmd = " ".join(cmd_parts)
                                         gvk, verb = map_command_to_api(cmd)
                                         if gvk and verb:
-                                            spec["actions"].append({"gvk": gvk, "verb": verb})
+                                            action = {
+                                                "gvk": gvk,
+                                                "verb": verb.lower(),
+                                                "phase": "test",
+                                                "resources": [gvk],
+                                            }
+                                            spec["actions"].append(action)
                     elif isinstance(n, ast.Assert):
                         expectation = extract_assertion_expectation(n)
                         if expectation:
+                            # Add resources field to expectation
+                            expectation["resources"] = extract_resources_from_expectation(n)
                             spec["expectations"].append(expectation)
 
                 # Add tech detection
@@ -1339,7 +1784,41 @@ class TestVisitor(ast.NodeVisitor):
                     step_patterns = analyze_step_patterns_in_file(item)
                     spec["by_steps"] = step_patterns
 
+                # Add class-level teardown operations
+                if self.current_class:
+                    class_teardown_ops = self.class_teardown_ops.get(self.current_class, [])
+                    spec["actions"].extend(class_teardown_ops)
+
+                # Ensure all operations have a phase tag
+                for action in spec["actions"]:
+                    if "phase" not in action:
+                        action["phase"] = "test"
+
+                # Populate resources for each action (the action's GVK if present)
+                for action in spec["actions"]:
+                    if isinstance(action, dict):
+                        gvk = action.get("gvk", "")
+                        if gvk and "resources" not in action:
+                            action["resources"] = [gvk]
+
+                # Ensure all expectations have resources field (even if empty)
+                for expectation in spec["expectations"]:
+                    if isinstance(expectation, dict) and "resources" not in expectation:
+                        expectation["resources"] = []
+
+                # Extract prerequisites (unique GVKs from setup phase actions)
+                prereq_set = set()
+                for action in spec["actions"]:
+                    if isinstance(action, dict) and action.get("phase") == "setup":
+                        gvk = action.get("gvk", "")
+                        if gvk:
+                            prereq_set.add(gvk)
+                spec["prereq"] = sorted(list(prereq_set))  # Always present, even if empty
+
                 self.specs.append(spec)
+
+        # Restore previous class context
+        self.current_class = old_class
 
     def visit_Import(self, node: ast.Import):
         """Track import statements for cross-file detection"""
@@ -1819,6 +2298,87 @@ def is_by_call(node: ast.Call) -> bool:
     elif isinstance(node.func, ast.Attribute):
         return node.func.attr == "By"
     return False
+
+
+def is_pytest_fixture(node: ast.FunctionDef) -> bool:
+    """Check if a function is a pytest fixture"""
+    for decorator in node.decorator_list:
+        # Check for @pytest.fixture
+        if isinstance(decorator, ast.Attribute):
+            if decorator.attr == "fixture":
+                if isinstance(decorator.value, ast.Name) and decorator.value.id == "pytest":
+                    return True
+        # Check for @pytest.fixture(...)
+        elif isinstance(decorator, ast.Call):
+            if isinstance(decorator.func, ast.Attribute):
+                if decorator.func.attr == "fixture":
+                    if (
+                        isinstance(decorator.func.value, ast.Name)
+                        and decorator.func.value.id == "pytest"
+                    ):
+                        return True
+    return False
+
+
+def get_fixture_scope(node: ast.FunctionDef) -> str:
+    """Get the scope of a pytest fixture (function, class, module, session)"""
+    for decorator in node.decorator_list:
+        if isinstance(decorator, ast.Call):
+            if isinstance(decorator.func, ast.Attribute):
+                if decorator.func.attr == "fixture":
+                    # Check keyword arguments for scope
+                    for keyword in decorator.keywords:
+                        if keyword.arg == "scope":
+                            if isinstance(keyword.value, ast.Constant):
+                                return keyword.value.value
+    return "function"  # Default scope
+
+
+def is_setup_method(node: ast.FunctionDef) -> bool:
+    """Check if a method is setup_method (pytest)"""
+    return node.name == "setup_method"
+
+
+def is_teardown_method(node: ast.FunctionDef) -> bool:
+    """Check if a method is teardown_method (pytest)"""
+    return node.name == "teardown_method"
+
+
+def is_setup_class(node: ast.FunctionDef) -> bool:
+    """Check if a method is setup_class (pytest)"""
+    return node.name == "setup_class"
+
+
+def is_teardown_class(node: ast.FunctionDef) -> bool:
+    """Check if a method is teardown_class (pytest)"""
+    return node.name == "teardown_class"
+
+
+def find_operations_in_fixture(fixture_node: ast.FunctionDef) -> list:
+    """Find all Kubernetes operations within a pytest fixture"""
+    operations = analyze_node_for_operations(fixture_node)
+    # Tag all operations as setup
+    for operation in operations:
+        operation["phase"] = "setup"
+    return operations
+
+
+def find_operations_in_setup_method(method_node: ast.FunctionDef) -> list:
+    """Find all Kubernetes operations within a setup method"""
+    operations = analyze_node_for_operations(method_node)
+    # Tag all operations as setup
+    for operation in operations:
+        operation["phase"] = "setup"
+    return operations
+
+
+def find_operations_in_teardown_method(method_node: ast.FunctionDef) -> list:
+    """Find all Kubernetes operations within a teardown method"""
+    operations = analyze_node_for_operations(method_node)
+    # Tag all operations as teardown
+    for operation in operations:
+        operation["phase"] = "teardown"
+    return operations
 
 
 def extract_by_description(by_call: ast.Call) -> str:
