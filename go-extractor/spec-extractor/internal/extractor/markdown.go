@@ -11,12 +11,12 @@ func RenderMarkdown(spec *FileSpec) []byte {
 	fmt.Fprintf(&b, "## %s\n\n", spec.FilePath)
 	// Walk containers from root
 	for _, c := range spec.Root.Children {
-		renderContainer(&b, c, 0)
+		renderContainerWithConditions(&b, c, 0, []string{})
 	}
 	return b.Bytes()
 }
 
-func renderContainer(b *bytes.Buffer, c *Container, depth int) {
+func renderContainerWithConditions(b *bytes.Buffer, c *Container, depth int, whenConditions []string) {
 	// Heading level by depth: 0=>###, 1=>####, 2=>#####
 	level := 3 + depth
 	if level > 6 {
@@ -24,6 +24,12 @@ func renderContainer(b *bytes.Buffer, c *Container, depth int) {
 	}
 	heading := strings.Repeat("#", level)
 	fmt.Fprintf(b, "%s %s: %s\n\n", heading, c.Kind, safe(c.Description))
+
+	// Show inherited When conditions as prerequisites
+	if len(whenConditions) > 0 {
+		fmt.Fprintf(b, "- **when**: %s\n", strings.Join(whenConditions, ", "))
+	}
+
 	if len(c.Labels) > 0 {
 		fmt.Fprintf(b, "- **labels**: %s\n", strings.Join(c.Labels, ", "))
 	}
@@ -48,8 +54,16 @@ func renderContainer(b *bytes.Buffer, c *Container, depth int) {
 		}
 		fmt.Fprintln(b)
 	}
+
+	// Pass down When conditions to children, adding current one if this is a When block
+	childWhenConditions := make([]string, len(whenConditions))
+	copy(childWhenConditions, whenConditions)
+	if c.Kind == "When" && c.Description != "" {
+		childWhenConditions = append(childWhenConditions, safe(c.Description))
+	}
+
 	for _, child := range c.Children {
-		renderContainer(b, child, depth+1)
+		renderContainerWithConditions(b, child, depth+1, childWhenConditions)
 	}
 }
 

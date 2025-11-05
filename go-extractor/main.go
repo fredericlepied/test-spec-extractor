@@ -38,6 +38,7 @@ type ByStep struct {
 type DescribeScope struct {
 	Call          *ast.CallExpr
 	Description   string // Description text from Describe/When/Context block (without prefix)
+	IsWhenBlock   bool   // True if this is a When block (used for prerequisites)
 	BeforeEachOps []Action
 	BeforeAllOps  []Action
 	AfterEachOps  []Action
@@ -1627,6 +1628,7 @@ func buildDescribeScopeTree(f *ast.File, fset *token.FileSet) []*DescribeScope {
 		scope := &DescribeScope{
 			Call:          call,
 			Description:   description,
+			IsWhenBlock:   isWhenCall(call), // Set flag if this is a When block
 			BeforeEachOps: []Action{},
 			BeforeAllOps:  []Action{},
 			AfterEachOps:  []Action{},
@@ -1925,16 +1927,30 @@ func extractItBlocks(f *ast.File, fset *token.FileSet, filePath, rootPath string
 				}
 			}
 
-
-			// Extract prerequisites (unique GVKs from setup phase actions)
+			// Extract prerequisites (unique GVKs from setup phase actions + When block descriptions)
 			prereqSet := make(map[string]bool)
+
+			// Add GVKs from setup phase actions
 			for _, action := range spec.Actions {
 				if action.Phase == "setup" && action.GVK != "" {
 					prereqSet[action.GVK] = true
 				}
 			}
-			for gvk := range prereqSet {
-				spec.Prereq = append(spec.Prereq, gvk)
+
+			// Add When block descriptions as prerequisites (context/preconditions)
+			if scope != nil {
+				currentScope := scope
+				for currentScope != nil {
+					if currentScope.IsWhenBlock && currentScope.Description != "" {
+						// Prefix When descriptions to distinguish from GVKs
+						prereqSet["when:"+currentScope.Description] = true
+					}
+					currentScope = currentScope.Parent
+				}
+			}
+
+			for prereq := range prereqSet {
+				spec.Prereq = append(spec.Prereq, prereq)
 			}
 
 			specs = append(specs, spec)
