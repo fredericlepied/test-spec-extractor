@@ -1747,6 +1747,36 @@ def write_report(pairs_ab, pairs_ba, go_specs, py_specs, out_csv):
     print(f"Wrote {out_csv} ({len(df)} rows)")
 
 
+def get_basename_relative_path(file_path: str, test_id: str) -> str:
+    """Extract basename/relative path from full file path, matching Go extractor behavior."""
+    if not file_path:
+        # Extract from test_id if no file_path (format: basename/relative_path:test_name)
+        if ":" in test_id:
+            return test_id.split(":")[0]
+        return ""
+
+    # For full paths like /home/user/external/eco-gotests/tests/file.go
+    # Extract the pattern: eco-gotests/tests/file.go
+    path_parts = file_path.split("/")
+
+    # Find a reasonable starting point - look for common repo patterns
+    start_idx = 0
+    for i, part in enumerate(path_parts):
+        # Common repo patterns that should be the basename
+        if part.endswith("-gotests") or part.endswith("-pytests") or part.endswith("-tests"):
+            start_idx = i
+            break
+        elif part in ["tests", "test", "eco-gotests", "openshift-tests"]:
+            start_idx = i
+            break
+
+    if start_idx > 0:
+        return "/".join(path_parts[start_idx:])
+
+    # Fallback: use last 3 parts of the path
+    return "/".join(path_parts[-3:]) if len(path_parts) >= 3 else file_path
+
+
 def write_comprehensive_report(pairs, all_specs, outfile):
     """Write comprehensive similarity report to CSV (language-agnostic)."""
     import pandas as pd
@@ -1762,8 +1792,12 @@ def write_comprehensive_report(pairs, all_specs, outfile):
                 "idx_b": p["idx_b"],
                 "a_test": spec_a.get("test_id") or spec_a.get("desc", ""),
                 "b_test": spec_b.get("test_id") or spec_b.get("desc", ""),
-                "a_file": spec_a.get("file_path", ""),
-                "b_file": spec_b.get("file_path", ""),
+                "a_file": get_basename_relative_path(
+                    spec_a.get("file_path", ""), spec_a.get("test_id", "")
+                ),
+                "b_file": get_basename_relative_path(
+                    spec_b.get("file_path", ""), spec_b.get("test_id", "")
+                ),
                 "a_language": spec_a.get("_language", "unknown"),
                 "b_language": spec_b.get("_language", "unknown"),
                 "a_repo": spec_a.get("_repo", ""),

@@ -35,7 +35,7 @@ func renderContainer(b *bytes.Buffer, c *Container, depth int) {
 	}
 	if len(c.Cases) > 0 {
 		for _, tc := range c.Cases {
-			fmt.Fprintf(b, "- **It**: %s\n", safe(tc.Description))
+			fmt.Fprintf(b, "- **Test**: %s\n", safe(tc.Description))
 			if len(tc.Labels) > 0 {
 				fmt.Fprintf(b, "  - labels: %s\n", strings.Join(tc.Labels, ", "))
 			}
