@@ -7,18 +7,21 @@ type TestStep struct {
 }
 
 type TestCase struct {
-	Description string
-	Labels      []string
-	Steps       []TestStep
+	Description  string
+	Labels       []string
+	PrepSteps    []TestStep // Individual test prerequisites (including Skip conditions)
+	Steps        []TestStep
+	CleanupSteps []TestStep // Cleanup actions and Fail messages
 }
 
 type Container struct {
-	Kind        string // Describe, Context, When
-	Description string
-	Labels      []string
-	Children    []*Container
-	PrepSteps   []TestStep // By(...) found in active Before* under this container
-	Cases       []TestCase
+	Kind         string // Describe, Context, When
+	Description  string
+	Labels       []string
+	Children     []*Container
+	PrepSteps    []TestStep // By(...) found in active Before* under this container
+	CleanupSteps []TestStep // By(...) found in active After* under this container
+	Cases        []TestCase
 }
 
 type FileSpec struct {

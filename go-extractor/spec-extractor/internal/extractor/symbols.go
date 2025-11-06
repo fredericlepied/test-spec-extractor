@@ -29,12 +29,21 @@ func NewRecognizer(imports map[string]string, cliAliases map[string][]string) *R
 	add("Context", "Context")
 	add("When", "When")
 	add("It", "It")
+	add("Specify", "Specify")             // Alternative to It
+	add("DescribeTable", "DescribeTable") // Table-driven tests
 	add("By", "By")
 	add("BeforeEach", "BeforeEach")
 	add("JustBeforeEach", "JustBeforeEach")
 	add("BeforeAll", "BeforeAll")
 	add("BeforeSuite", "BeforeSuite")
+	add("AfterEach", "AfterEach")
+	add("JustAfterEach", "JustAfterEach")
+	add("AfterSuite", "AfterSuite")
+	add("DeferCleanup", "DeferCleanup")
 	add("Label", "Label")
+	add("Entry", "Entry") // Table test entries
+	add("Fail", "Fail")
+	add("Skip", "Skip")
 
 	// qualified ginkgo.* if imported under an alias
 	for local, full := range imports {
@@ -44,12 +53,21 @@ func NewRecognizer(imports map[string]string, cliAliases map[string][]string) *R
 				"Context":        "Context",
 				"When":           "When",
 				"It":             "It",
+				"Specify":        "Specify",
+				"DescribeTable":  "DescribeTable",
 				"By":             "By",
 				"BeforeEach":     "BeforeEach",
 				"JustBeforeEach": "JustBeforeEach",
 				"BeforeAll":      "BeforeAll",
 				"BeforeSuite":    "BeforeSuite",
+				"AfterEach":      "AfterEach",
+				"JustAfterEach":  "JustAfterEach",
+				"AfterSuite":     "AfterSuite",
+				"DeferCleanup":   "DeferCleanup",
 				"Label":          "Label",
+				"Entry":          "Entry",
+				"Fail":           "Fail",
+				"Skip":           "Skip",
 			} {
 				add(canon, local+"."+base)
 			}
@@ -105,12 +123,16 @@ func (r *Recognizer) IsContainer(call *ast.CallExpr) (string, bool) {
 		return "Context", true
 	case r.is("When", call):
 		return "When", true
+	case r.is("DescribeTable", call):
+		return "DescribeTable", true
 	default:
 		return "", false
 	}
 }
 
-func (r *Recognizer) IsIt(call *ast.CallExpr) bool { return r.is("It", call) }
+func (r *Recognizer) IsIt(call *ast.CallExpr) bool {
+	return r.is("It", call) || r.is("Specify", call)
+}
 func (r *Recognizer) IsBy(call *ast.CallExpr) bool { return r.is("By", call) }
 func (r *Recognizer) IsBefore(call *ast.CallExpr) (string, bool) {
 	switch {
@@ -126,4 +148,22 @@ func (r *Recognizer) IsBefore(call *ast.CallExpr) (string, bool) {
 		return "", false
 	}
 }
-func (r *Recognizer) IsLabel(call *ast.CallExpr) bool { return r.is("Label", call) }
+
+func (r *Recognizer) IsAfter(call *ast.CallExpr) (string, bool) {
+	switch {
+	case r.is("AfterEach", call):
+		return "AfterEach", true
+	case r.is("JustAfterEach", call):
+		return "JustAfterEach", true
+	case r.is("AfterSuite", call):
+		return "AfterSuite", true
+	default:
+		return "", false
+	}
+}
+
+func (r *Recognizer) IsLabel(call *ast.CallExpr) bool        { return r.is("Label", call) }
+func (r *Recognizer) IsEntry(call *ast.CallExpr) bool        { return r.is("Entry", call) }
+func (r *Recognizer) IsDeferCleanup(call *ast.CallExpr) bool { return r.is("DeferCleanup", call) }
+func (r *Recognizer) IsFail(call *ast.CallExpr) bool         { return r.is("Fail", call) }
+func (r *Recognizer) IsSkip(call *ast.CallExpr) bool         { return r.is("Skip", call) }

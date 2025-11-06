@@ -39,15 +39,33 @@ func renderContainerWithConditions(b *bytes.Buffer, c *Container, depth int, whe
 			fmt.Fprintf(b, "  - %s\n", safe(s.Text))
 		}
 	}
+	if len(c.CleanupSteps) > 0 {
+		fmt.Fprintf(b, "- **cleanup**:\n")
+		for _, s := range c.CleanupSteps {
+			fmt.Fprintf(b, "  - %s\n", safe(s.Text))
+		}
+	}
 	if len(c.Cases) > 0 {
 		for _, tc := range c.Cases {
 			fmt.Fprintf(b, "- **Test**: %s\n", safe(tc.Description))
 			if len(tc.Labels) > 0 {
 				fmt.Fprintf(b, "  - labels: %s\n", strings.Join(tc.Labels, ", "))
 			}
+			if len(tc.PrepSteps) > 0 {
+				fmt.Fprintf(b, "  - preparation:\n")
+				for _, s := range tc.PrepSteps {
+					fmt.Fprintf(b, "    - %s\n", safe(s.Text))
+				}
+			}
 			if len(tc.Steps) > 0 {
 				fmt.Fprintf(b, "  - steps:\n")
 				for _, s := range tc.Steps {
+					fmt.Fprintf(b, "    - %s\n", safe(s.Text))
+				}
+			}
+			if len(tc.CleanupSteps) > 0 {
+				fmt.Fprintf(b, "  - cleanup:\n")
+				for _, s := range tc.CleanupSteps {
 					fmt.Fprintf(b, "    - %s\n", safe(s.Text))
 				}
 			}
@@ -68,7 +86,8 @@ func renderContainerWithConditions(b *bytes.Buffer, c *Container, depth int, whe
 }
 
 func safe(s string) string {
-	// naive escaping for markdown bullets
+	// naive escaping for markdown bullets and underscores
 	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "_", "\\_")
 	return s
 }

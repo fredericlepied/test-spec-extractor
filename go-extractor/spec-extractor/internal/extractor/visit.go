@@ -57,6 +57,20 @@ func (v *visitor) visit(n ast.Node) bool {
 		return true
 	}
 
+	if _, isAfter := v.recog.IsAfter(call); isAfter {
+		if fn := firstFuncLit(call); fn != nil {
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if be, ok := n.(*ast.CallExpr); ok && v.recog.IsBy(be) {
+					if s := firstStringArg(be); s != "" {
+						v.current().CleanupSteps = append(v.current().CleanupSteps, TestStep{Text: s})
+					}
+				}
+				return true
+			})
+		}
+		return true
+	}
+
 	if v.recog.IsIt(call) {
 		desc := firstStringArg(call)
 		tc := TestCase{Description: desc}
@@ -65,9 +79,21 @@ func (v *visitor) visit(n ast.Node) bool {
 		if fn := firstFuncLit(call); fn != nil {
 			// Walk only the body to collect By steps
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				if be, ok := n.(*ast.CallExpr); ok && v.recog.IsBy(be) {
-					if s := firstStringArg(be); s != "" {
-						tc.Steps = append(tc.Steps, TestStep{Text: s})
+				if be, ok := n.(*ast.CallExpr); ok {
+					if v.recog.IsBy(be) {
+						if s := firstStringArg(be); s != "" {
+							tc.Steps = append(tc.Steps, TestStep{Text: s})
+						}
+					} else if v.recog.IsFail(be) {
+						// Fail messages go to cleanup section
+						if s := firstStringArg(be); s != "" {
+							tc.CleanupSteps = append(tc.CleanupSteps, TestStep{Text: s})
+						}
+					} else if v.recog.IsSkip(be) {
+						// Skip messages go to test case prep steps as negative prerequisites
+						if s := firstStringArg(be); s != "" {
+							tc.PrepSteps = append(tc.PrepSteps, TestStep{Text: "SKIP: " + s})
+						}
 					}
 				}
 				return true
@@ -77,7 +103,26 @@ func (v *visitor) visit(n ast.Node) bool {
 		return true
 	}
 
-	// Standalone By calls at top-level are ignored; By is handled inside It/Before bodies above.
+	// Handle Entry calls for table-driven tests
+	if v.recog.IsEntry(call) {
+		desc := firstStringArg(call)
+		if desc != "" {
+			tc := TestCase{Description: desc}
+			tc.Labels = append(tc.Labels, extractLabels(v.recog, call)...)
+			v.current().Cases = append(v.current().Cases, tc)
+		}
+		return true
+	}
+
+	// Handle DeferCleanup calls that might contain descriptions
+	if v.recog.IsDeferCleanup(call) {
+		if s := firstStringArg(call); s != "" {
+			v.current().CleanupSteps = append(v.current().CleanupSteps, TestStep{Text: s})
+		}
+		return true
+	}
+
+	// Standalone By calls at top-level are ignored; By is handled inside It/Before/After bodies above.
 
 	return true
 }

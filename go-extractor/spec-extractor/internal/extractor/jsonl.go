@@ -7,11 +7,12 @@ import (
 )
 
 type PerItRecord struct {
-	Desc      string   `json:"desc"`
-	Labels    []string `json:"labels,omitempty"`
-	PrepSteps []string `json:"prep_steps,omitempty"`
-	Steps     []string `json:"steps,omitempty"`
-	FilePath  string   `json:"file_path,omitempty"`
+	Desc         string   `json:"desc"`
+	Labels       []string `json:"labels,omitempty"`
+	PrepSteps    []string `json:"prep_steps,omitempty"`
+	Steps        []string `json:"steps,omitempty"`
+	CleanupSteps []string `json:"cleanup_steps,omitempty"`
+	FilePath     string   `json:"file_path,omitempty"`
 }
 
 // WritePerItJSONL appends one JSON object per test case found in the FileSpec to the given writer.
@@ -45,8 +46,22 @@ func WritePerItJSONL(spec *FileSpec, filePath string) error {
 					rec.PrepSteps = append(rec.PrepSteps, s.Text)
 				}
 			}
+			// append test case specific preparation steps (including Skip conditions)
+			for _, st := range tc.PrepSteps {
+				rec.PrepSteps = append(rec.PrepSteps, st.Text)
+			}
+			// append inherited cleanup steps from this container
+			if len(c.CleanupSteps) > 0 {
+				for _, s := range c.CleanupSteps {
+					rec.CleanupSteps = append(rec.CleanupSteps, s.Text)
+				}
+			}
 			for _, st := range tc.Steps {
 				rec.Steps = append(rec.Steps, st.Text)
+			}
+			// append test case specific cleanup steps
+			for _, st := range tc.CleanupSteps {
+				rec.CleanupSteps = append(rec.CleanupSteps, st.Text)
 			}
 			if b, err := json.Marshal(rec); err == nil {
 				w.Write(b)
