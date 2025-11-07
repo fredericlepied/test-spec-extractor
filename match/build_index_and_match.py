@@ -923,11 +923,15 @@ def filter_by_purpose_compatibility(
         resources_a = get_resources_from_spec(specs_a[idx_a])
         resources_b = get_resources_from_spec(specs_b[idx_b])
 
-        # CRITICAL: Both specs must have at least one action to be considered for matching
-        actions_a = specs_a[idx_a].get("actions") or []
-        actions_b = specs_b[idx_b].get("actions") or []
-        if len(actions_a) == 0 or len(actions_b) == 0:
-            continue
+        # CRITICAL: Both specs must have at least one action to be considered for matching,
+        # except for lightweight per-It records (desc-based) where we rely on semantic similarity only.
+        is_desc_a = "desc" in specs_a[idx_a]
+        is_desc_b = "desc" in specs_b[idx_b]
+        if not (is_desc_a or is_desc_b):
+            actions_a = specs_a[idx_a].get("actions") or []
+            actions_b = specs_b[idx_b].get("actions") or []
+            if len(actions_a) == 0 or len(actions_b) == 0:
+                continue
 
         # CRITICAL: Exclude suite setup functions from matching (these are infrastructure, not real tests)
         test_id_a = specs_a[idx_a].get("test_id", "")
@@ -1062,6 +1066,10 @@ def is_utility_test(spec: Dict[str, Any]) -> bool:
 
 def is_empty_test(spec: Dict[str, Any]) -> bool:
     """Check if a test spec is empty (has no meaningful content)."""
+    # Per-It lightweight schema: treat as non-empty if it has a description or steps/labels
+    if "desc" in spec or (spec.get("steps") or spec.get("prep_steps") or spec.get("labels")):
+        return False
+
     # Handle None values by converting to empty lists
     actions = spec.get("actions") or []
     expectations = spec.get("expectations") or []
@@ -1109,6 +1117,25 @@ def filter_empty_tests(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def spec_to_text(spec: Dict[str, Any]) -> str:
     """Generate structured text representation that preserves JSON semantics"""
+    # Per-It lightweight schema support
+    if "desc" in spec:
+        parts = []
+        desc = spec.get("desc", "").strip()
+        if desc:
+            parts.append(desc)
+        labels = spec.get("labels") or []
+        if labels:
+            parts.append("labels: " + ", ".join(labels))
+        prep = spec.get("prep_steps") or []
+        if prep:
+            parts.append("prep: " + "; ".join(prep))
+        steps = spec.get("steps") or []
+        if steps:
+            parts.append("steps:")
+            parts.extend([f"- {s}" for s in steps])
+        # Note: file_path is NOT included in text for FAISS - it's metadata only
+        return "\n".join(parts)
+
     # Don't include test_id in the content - it's used as document ID
     parts = []
 
@@ -1553,9 +1580,9 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
                     max(0.0, float(sc) + purpose_boost + tech_boost + functional_boost),
                 )
 
-            # Apply cross-language threshold filtering
-            test_id_a = specs_a[i]["test_id"]
-            test_id_b = specs_b[j]["test_id"]
+            # Apply cross-language threshold filtering (fallback to desc for per-It records)
+            test_id_a = specs_a[i].get("test_id") or specs_a[i].get("desc", "")
+            test_id_b = specs_b[j].get("test_id") or specs_b[j].get("desc", "")
             lang_a = get_language_from_test_id(test_id_a)
             lang_b = get_language_from_test_id(test_id_b)
 
@@ -1594,8 +1621,8 @@ def cross_match(specs_a, embs_a, specs_b, embs_b, topk=5):
                     "idx_b": int(j),
                     "base_score": float(sc),
                     "blended_score": boosted_score,
-                    "a_test": specs_a[i]["test_id"],
-                    "b_test": specs_b[j]["test_id"],
+                    "a_test": specs_a[i].get("test_id") or specs_a[i].get("desc", ""),
+                    "b_test": specs_b[j].get("test_id") or specs_b[j].get("desc", ""),
                     "shared_signals": shared,
                 }
             )
@@ -1720,6 +1747,36 @@ def write_report(pairs_ab, pairs_ba, go_specs, py_specs, out_csv):
     print(f"Wrote {out_csv} ({len(df)} rows)")
 
 
+def get_basename_relative_path(file_path: str, test_id: str) -> str:
+    """Extract basename/relative path from full file path, matching Go extractor behavior."""
+    if not file_path:
+        # Extract from test_id if no file_path (format: basename/relative_path:test_name)
+        if ":" in test_id:
+            return test_id.split(":")[0]
+        return ""
+
+    # For full paths like /home/user/external/eco-gotests/tests/file.go
+    # Extract the pattern: eco-gotests/tests/file.go
+    path_parts = file_path.split("/")
+
+    # Find a reasonable starting point - look for common repo patterns
+    start_idx = 0
+    for i, part in enumerate(path_parts):
+        # Common repo patterns that should be the basename
+        if part.endswith("-gotests") or part.endswith("-pytests") or part.endswith("-tests"):
+            start_idx = i
+            break
+        elif part in ["tests", "test", "eco-gotests", "openshift-tests"]:
+            start_idx = i
+            break
+
+    if start_idx > 0:
+        return "/".join(path_parts[start_idx:])
+
+    # Fallback: use last 3 parts of the path
+    return "/".join(path_parts[-3:]) if len(path_parts) >= 3 else file_path
+
+
 def write_comprehensive_report(pairs, all_specs, outfile):
     """Write comprehensive similarity report to CSV (language-agnostic)."""
     import pandas as pd
@@ -1733,16 +1790,22 @@ def write_comprehensive_report(pairs, all_specs, outfile):
             {
                 "idx_a": p["idx_a"],
                 "idx_b": p["idx_b"],
-                "a_test": spec_a["test_id"],
-                "b_test": spec_b["test_id"],
-                "a_language": spec_a["_language"],
-                "b_language": spec_b["_language"],
-                "a_repo": spec_a["_repo"],
-                "b_repo": spec_b["_repo"],
+                "a_test": spec_a.get("test_id") or spec_a.get("desc", ""),
+                "b_test": spec_b.get("test_id") or spec_b.get("desc", ""),
+                "a_file": get_basename_relative_path(
+                    spec_a.get("file_path", ""), spec_a.get("test_id", "")
+                ),
+                "b_file": get_basename_relative_path(
+                    spec_b.get("file_path", ""), spec_b.get("test_id", "")
+                ),
+                "a_language": spec_a.get("_language", "unknown"),
+                "b_language": spec_b.get("_language", "unknown"),
+                "a_repo": spec_a.get("_repo", ""),
+                "b_repo": spec_b.get("_repo", ""),
                 "base_score": p["base_score"],
                 "blended_score": p["blended_score"],
                 "shared_signals": p["shared_signals"],
-                "match_type": f"{spec_a['_language']}->{spec_b['_language']}",
+                "match_type": f"{spec_a.get('_language','unknown')}->{spec_b.get('_language','unknown')}",
             }
         )
 
@@ -1803,6 +1866,16 @@ def main():
     for s in py_specs:
         s["_repo"] = "py"
         s["_language"] = "py"
+
+    # If both inputs are the same file and records are per-It (desc-based), treat as mono-language 'go'
+    if args.go == args.py:
+        if all(("desc" in s) for s in go_specs + py_specs):
+            for s in go_specs:
+                s["_repo"] = "go"
+                s["_language"] = "go"
+            for s in py_specs:
+                s["_repo"] = "go"
+                s["_language"] = "go"
 
     # Filter out empty tests
     print("Filtering Go specs...")
