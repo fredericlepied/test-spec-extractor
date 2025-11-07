@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# extract-spec-md.sh - Ginkgo Spec Markdown Generator
-# This script generates per-file Ginkgo markdown specs from Go test repositories
+# extract-spec-md.sh - Ginkgo Spec Markdown Generator with Intelligent Similarity Analysis
+# This script generates per-file Ginkgo markdown specs from Go test repositories and performs
+# markdown-aware similarity analysis using hierarchical BDD context and semantic embeddings
 
 set -e  # Exit on any error
 
@@ -39,7 +40,12 @@ show_usage() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
-Ginkgo Spec Markdown Generator
+Ginkgo Spec Markdown Generator with Intelligent Similarity Analysis
+
+This script performs a complete workflow:
+1. Extracts BDD specifications from Ginkgo test files 
+2. Generates structured markdown documentation
+3. Performs intelligent similarity analysis using hierarchical context
 
 OPTIONS:
     -g, --go-root PATH      Path to Go test repository (can be used multiple times)
@@ -47,15 +53,37 @@ OPTIONS:
     -v, --verbose           Verbose output
     -h, --help              Show this help message
 
+FEATURES:
+    ✓ Enhanced BDD pattern extraction (Describe, Context, When, It, Specify, DescribeTable, Entry)
+    ✓ Semantic organization (preparation, steps, cleanup sections)
+    ✓ Skip conditions as negative prerequisites  
+    ✓ Markdown-aware similarity analysis with hierarchical context
+    ✓ FAISS-powered semantic embeddings for intelligent test matching
+    ✓ Duplicate detection and test consolidation recommendations
+
+OUTPUT FILES:
+    - {output-dir}/ - Structured markdown specs organized by repository
+    - {output-dir}/go_specs_per_it.jsonl - Per-test specifications in JSONL format
+    - {output-dir}/markdown_similarity_results.csv - Detailed similarity analysis
+    - {output-dir}/similarity_analysis.md - Human-readable similarity report
+
 EXAMPLES:
-    # Single repository
+    # Single repository with full analysis
     ./extract-spec-md.sh -g /path/to/eco-gotests
     
-    # Multiple Go repositories
-    ./extract-spec-md.sh -g /path/to/eco-gotests -g /path/to/openshift-tests
+    # Multiple Go repositories for comprehensive analysis
+    ./extract-spec-md.sh -g /path/to/eco-gotests -g /path/to/openshift-tests -g /path/to/cnf-gotests
     
     # Custom output directory
-    ./extract-spec-md.sh --go-root /path/to/go-tests --output-dir my_spec_md
+    ./extract-spec-md.sh --go-root /path/to/go-tests --output-dir my_analysis
+
+SIMILARITY ANALYSIS:
+    The integrated similarity analysis uses advanced techniques:
+    - Each test becomes a single document in FAISS with combined context
+    - Hierarchical BDD structure (Describe > Context > When > It) 
+    - Semantic embeddings of test descriptions, steps, and prerequisites
+    - Context-aware similarity scoring with container hierarchy
+    - Identification of potential duplicates and related tests
 
 EOF
 }
@@ -179,44 +207,158 @@ done
 
 cd ..
 
-# Step 3: Analyze per-It specs
-print_status "Step 3: Analyzing per-It specs..."
+# Step 3: Markdown-Aware Similarity Analysis
+print_status "Step 3: Running markdown-aware similarity analysis..."
 if [[ -f "$OUTPUT_DIR/go_specs_per_it.jsonl" ]]; then
     PER_IT_COUNT=$(wc -l < "$OUTPUT_DIR/go_specs_per_it.jsonl")
     print_success "Generated $PER_IT_COUNT per-It test specs"
     
-    # Optional: Find similar Go tests (self-match) to find duplicates
-    print_status "Step 3b: Finding similar Go tests (per-It analysis)..."
+    # Run the new markdown-aware similarity analysis
+    print_status "Step 3b: Performing intelligent similarity analysis with BDD context..."
     cd match
     
-    # Check if Python environment exists
+    # Setup Python environment
+    if [[ ! -d ".venv" ]]; then
+        print_status "Creating Python virtual environment..."
+        if ! python -m venv .venv; then
+            print_warning "Failed to create virtual environment, skipping similarity analysis"
+            cd ..
+        else
+            print_status "Virtual environment created"
+        fi
+    fi
+    
     if [[ -d ".venv" && -f ".venv/bin/activate" ]]; then
-        print_status "Using existing virtual environment..."
+        print_status "Activating virtual environment..."
         if source .venv/bin/activate; then
             # Check if dependencies are available
-            if python -c "import sentence_transformers, faiss, pandas, numpy" > /dev/null 2>&1; then
-                if python build_index_and_match.py \
-                    --go "../$OUTPUT_DIR/go_specs_per_it.jsonl" \
-                    --py "../$OUTPUT_DIR/go_specs_per_it.jsonl" \
-                    --out "../$OUTPUT_DIR/go_per_it_sim.csv" \
-                    --cov "../$OUTPUT_DIR/go_per_it_cov.csv"; then
-                    print_success "Generated $OUTPUT_DIR/go_per_it_sim.csv (per-It similarities)"
+            if ! python -c "import sentence_transformers, faiss, pandas, numpy" > /dev/null 2>&1; then
+                print_status "Installing Python dependencies for similarity analysis..."
+                if ! pip install --upgrade pip > /dev/null 2>&1; then
+                    print_warning "Failed to upgrade pip, skipping similarity analysis"
+                    cd ..
+                elif ! pip install -r requirements.txt > /dev/null 2>&1; then
+                    print_warning "Failed to install dependencies, skipping similarity analysis"
+                    cd ..
                 else
-                    print_warning "Failed to compute per-It similarities"
+                    print_success "Dependencies installed"
+                fi
+            fi
+            
+            # Run the new markdown-aware similarity analysis
+            if python -c "import sentence_transformers, faiss, pandas, numpy" > /dev/null 2>&1; then
+                cd ..
+                print_status "Running markdown-aware similarity analysis..."
+                
+                # Run with both JSONL and markdown data for enhanced context
+                if python markdown-similarity.py \
+                    --jsonl "$OUTPUT_DIR/go_specs_per_it.jsonl" \
+                    --markdown "$OUTPUT_DIR/" \
+                    --output "$OUTPUT_DIR/markdown_similarity_results.csv" \
+                    --repo-roots "${GO_ROOTS[@]}" \
+                    --threshold 0.75 \
+                    --top-k 10 \
+                    --exclude-same-file; then
+                    
+                    # Generate summary report
+                    print_status "Generating markdown similarity summary..."
+                    cd match
+                    source .venv/bin/activate
+                    cd ..
+                    
+                    # Create summary generation script
+                    cat > "$OUTPUT_DIR/generate_summary.py" << 'EOF'
+import pandas as pd
+import sys
+
+def generate_summary(csv_file, output_file):
+    try:
+        df = pd.read_csv(csv_file)
+    except:
+        with open(output_file, 'w') as f:
+            f.write("# Similarity Analysis Results\n\nNo similarity data found.\n")
+        return
+    
+    if len(df) == 0:
+        with open(output_file, 'w') as f:
+            f.write("# Similarity Analysis Results\n\nNo similarities found above threshold.\n")
+        return
+    
+    # Calculate statistics
+    avg_similarity = df['semantic_similarity'].mean()
+    high_similarity = df[df['semantic_similarity'] > 0.9]
+    medium_similarity = df[(df['semantic_similarity'] > 0.8) & (df['semantic_similarity'] <= 0.9)]
+    
+    with open(output_file, 'w') as f:
+        f.write("# Cross-File BDD Test Similarity Analysis Results\n\n")
+        f.write(f"## Summary\n\n")
+        f.write(f"- **Total similarity matches**: {len(df)}\n")
+        f.write(f"- **Average semantic similarity**: {avg_similarity:.3f}\n")
+        f.write(f"- **High similarity matches (>0.9)**: {len(high_similarity)} (potential duplicates)\n")
+        f.write(f"- **Medium similarity matches (0.8-0.9)**: {len(medium_similarity)} (related tests)\n")
+        f.write(f"- **Files with similar tests**: {df['query_file'].nunique()}\n")
+        f.write(f"- **Note**: Same-file matches are excluded to focus on meaningful cross-file similarities\n\n")
+        
+        if len(high_similarity) > 0:
+            f.write("## Potential Test Duplicates (>0.9 similarity)\n\n")
+            f.write("| Test 1 | Test 2 | Similarity | File 1 | File 2 |\n")
+            f.write("|--------|--------|------------|--------|--------|\n")
+            
+            for _, row in high_similarity.head(15).iterrows():
+                # Use the full normalized paths from CSV for consistency
+                f1 = row['query_file']
+                f2 = row['matched_file']
+                
+                # Handle potentially missing descriptions and create meaningful differentiators
+                query_desc = str(row['query_description']) if pd.notna(row['query_description']) else "No description"
+                matched_desc = str(row['matched_description']) if pd.notna(row['matched_description']) else "No description"
+                
+                # If descriptions are identical, differentiate by test ID or context
+                if query_desc == matched_desc:
+                    query_id = str(row['query_test_id']) if pd.notna(row['query_test_id']) else "unknown"
+                    matched_id = str(row['matched_test_id']) if pd.notna(row['matched_test_id']) else "unknown"
+                    query_display = f"{query_desc} ({query_id})"
+                    matched_display = f"{matched_desc} ({matched_id})"
+                else:
+                    query_display = query_desc
+                    matched_display = matched_desc
+                
+                # Truncate for display but ensure they're different
+                query_trunc = query_display[:40] + "..." if len(query_display) > 40 else query_display
+                matched_trunc = matched_display[:40] + "..." if len(matched_display) > 40 else matched_display
+                
+                f.write(f"| {query_trunc} | {matched_trunc} | {row['semantic_similarity']:.3f} | {f1} | {f2} |\n")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: python generate_summary.py input.csv output.md")
+        sys.exit(1)
+    generate_summary(sys.argv[1], sys.argv[2])
+EOF
+                    
+                    if python "$OUTPUT_DIR/generate_summary.py" "$OUTPUT_DIR/markdown_similarity_results.csv" "$OUTPUT_DIR/similarity_analysis.md"; then
+                        print_success "Generated $OUTPUT_DIR/similarity_analysis.md (BDD similarity report)"
+                        rm "$OUTPUT_DIR/generate_summary.py"  # Cleanup
+                    else
+                        print_warning "Failed to generate similarity summary"
+                        rm "$OUTPUT_DIR/generate_summary.py"  # Cleanup
+                    fi
+                else
+                    print_warning "Failed to run markdown-aware similarity analysis"
                 fi
             else
                 print_warning "Python dependencies not available, skipping similarity analysis"
+                cd ..
             fi
         else
             print_warning "Failed to activate virtual environment, skipping similarity analysis"
+            cd ..
         fi
     else
-        print_warning "Virtual environment not found, skipping similarity analysis"
-        print_status "Run ./extract-and-match.sh first to set up the environment"
+        print_warning "Virtual environment setup failed, skipping similarity analysis"
     fi
-    cd ..
 else
-    print_warning "No per-It specs generated"
+    print_warning "No per-It specs generated, skipping similarity analysis"
 fi
 
 # Final output
@@ -227,8 +369,11 @@ echo "  - $OUTPUT_DIR/ (Markdown specs organized by repository)"
 if [[ -f "$OUTPUT_DIR/go_specs_per_it.jsonl" ]]; then
     echo "  - $OUTPUT_DIR/go_specs_per_it.jsonl (Per-It test specs in JSONL format)"
 fi
-if [[ -f "$OUTPUT_DIR/go_per_it_sim.csv" ]]; then
-    echo "  - $OUTPUT_DIR/go_per_it_sim.csv (Per-It similarity analysis)"
+if [[ -f "$OUTPUT_DIR/markdown_similarity_results.csv" ]]; then
+    echo "  - $OUTPUT_DIR/markdown_similarity_results.csv (Detailed similarity analysis)"
+fi
+if [[ -f "$OUTPUT_DIR/similarity_analysis.md" ]]; then
+    echo "  - $OUTPUT_DIR/similarity_analysis.md (BDD similarity report)"
 fi
 
 echo
