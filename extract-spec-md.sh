@@ -6,6 +6,9 @@
 
 set -e  # Exit on any error
 
+# Store project root directory at script start
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -15,6 +18,7 @@ NC='\033[0m' # No Color
 
 # Default values
 GO_ROOTS=()
+PY_ROOTS=()
 OUTPUT_DIR="spec-md"
 VERBOSE=false
 
@@ -49,6 +53,7 @@ This script performs a complete workflow:
 
 OPTIONS:
     -g, --go-root PATH      Path to Go test repository (can be used multiple times)
+    -p, --py-root PATH      Path to Python test repository (can be used multiple times)
     -o, --output-dir DIR    Output directory for results (default: spec-md)
     -v, --verbose           Verbose output
     -h, --help              Show this help message
@@ -63,7 +68,8 @@ FEATURES:
 
 OUTPUT FILES:
     - {output-dir}/ - Structured markdown specs organized by repository
-    - {output-dir}/go_specs_per_it.jsonl - Per-test specifications in JSONL format
+    - {output-dir}/go_specs_per_it.jsonl - Per-test specifications in JSONL format (Go tests)
+    - {output-dir}/py_specs_per_it.jsonl - Per-test specifications in JSONL format (Python tests)
     - {output-dir}/markdown_similarity_results.csv - Detailed similarity analysis
     - {output-dir}/similarity_analysis.md - Human-readable similarity report
 
@@ -73,6 +79,12 @@ EXAMPLES:
     
     # Multiple Go repositories for comprehensive analysis
     ./extract-spec-md.sh -g /path/to/eco-gotests -g /path/to/openshift-tests -g /path/to/cnf-gotests
+    
+    # Python repository
+    ./extract-spec-md.sh -p /path/to/eco-pytests
+    
+    # Both Go and Python repositories for cross-language similarity
+    ./extract-spec-md.sh -g /path/to/eco-gotests -p /path/to/eco-pytests
     
     # Custom output directory
     ./extract-spec-md.sh --go-root /path/to/go-tests --output-dir my_analysis
@@ -93,6 +105,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -g|--go-root)
             GO_ROOTS+=("$2")
+            shift 2
+            ;;
+        -p|--py-root)
+            PY_ROOTS+=("$2")
             shift 2
             ;;
         -o|--output-dir)
@@ -116,8 +132,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required arguments
-if [[ ${#GO_ROOTS[@]} -eq 0 ]]; then
-    print_error "At least one --go-root is required"
+if [[ ${#GO_ROOTS[@]} -eq 0 && ${#PY_ROOTS[@]} -eq 0 ]]; then
+    print_error "At least one --go-root or --py-root is required"
     show_usage
     exit 1
 fi
@@ -130,14 +146,29 @@ for go_root in "${GO_ROOTS[@]}"; do
     fi
 done
 
+for py_root in "${PY_ROOTS[@]}"; do
+    if [[ ! -d "$py_root" ]]; then
+        print_error "Python root directory does not exist: $py_root"
+        exit 1
+    fi
+done
+
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
 
-print_status "Starting Ginkgo Spec Markdown Generator"
-print_status "Go repositories: ${#GO_ROOTS[@]}"
-for go_root in "${GO_ROOTS[@]}"; do
-    print_status "  - $go_root"
-done
+print_status "Starting Spec Markdown Generator"
+if [[ ${#GO_ROOTS[@]} -gt 0 ]]; then
+    print_status "Go repositories: ${#GO_ROOTS[@]}"
+    for go_root in "${GO_ROOTS[@]}"; do
+        print_status "  - $go_root"
+    done
+fi
+if [[ ${#PY_ROOTS[@]} -gt 0 ]]; then
+    print_status "Python repositories: ${#PY_ROOTS[@]}"
+    for py_root in "${PY_ROOTS[@]}"; do
+        print_status "  - $py_root"
+    done
+fi
 print_status "Output directory: $OUTPUT_DIR"
 echo
 
@@ -207,15 +238,102 @@ done
 
 cd ..
 
+# Step 2b: Generate per-file Python markdown specs (if Python repos provided)
+if [[ ${#PY_ROOTS[@]} -gt 0 ]]; then
+    print_status "Step 2b: Generating per-file Python markdown specs..."
+    
+    # Per-It JSONL output for Python
+    PY_PER_IT_JSONL="$OUTPUT_DIR/py_specs_per_it.jsonl"
+    rm -f "$PY_PER_IT_JSONL"
+    
+    PY_TOTAL_FILES=0
+    for i in "${!PY_ROOTS[@]}"; do
+        py_root="${PY_ROOTS[$i]}"
+        # Extract repository name: if path ends with /src/eco_pytests, use parent dir name
+        # Otherwise use basename
+        if [[ "$py_root" == */src/eco_pytests ]]; then
+            repo_name=$(basename "$(dirname "$(dirname "$py_root")")")
+        else
+            repo_name=$(basename "$py_root")
+        fi
+        # Normalize: replace underscores with hyphens for consistency
+        repo_name=$(echo "$repo_name" | sed 's/_/-/g')
+        outdir="$OUTPUT_DIR/$repo_name"
+        print_status "  Processing $repo_name..."
+        
+        # Use absolute paths to avoid issues when changing directories
+        abs_outdir=$(cd "$(dirname "$outdir")" && pwd)/$(basename "$outdir")
+        abs_jsonl=$(cd "$(dirname "$PY_PER_IT_JSONL")" && pwd)/$(basename "$PY_PER_IT_JSONL")
+        
+        if [[ "$VERBOSE" == "true" ]]; then
+            if ! (cd py-extractor && python3 -m spec_extractor.main --root "$py_root" --out "$abs_outdir" --jsonl "$abs_jsonl"); then
+                print_warning "  Failed to render markdown for $repo_name"
+                cd ..
+                continue
+            fi
+        else
+            if ! (cd py-extractor && python3 -m spec_extractor.main --root "$py_root" --out "$abs_outdir" --jsonl "$abs_jsonl" >/dev/null 2>&1); then
+                print_warning "  Failed to render markdown for $repo_name"
+                cd ..
+                continue
+            fi
+        fi
+        
+        cd ..
+        
+        # Count generated files (use absolute path since we're back in project root)
+        if [[ -d "$abs_outdir" ]]; then
+            repo_files=$(find "$abs_outdir" -name "*.md" | wc -l)
+            PY_TOTAL_FILES=$((PY_TOTAL_FILES + repo_files))
+            print_success "  Generated $repo_files markdown files for $repo_name"
+        fi
+    done
+    
+    TOTAL_FILES=$((TOTAL_FILES + PY_TOTAL_FILES))
+fi
+
 # Step 3: Markdown-Aware Similarity Analysis
 print_status "Step 3: Running markdown-aware similarity analysis..."
-if [[ -f "$OUTPUT_DIR/go_specs_per_it.jsonl" ]]; then
-    PER_IT_COUNT=$(wc -l < "$OUTPUT_DIR/go_specs_per_it.jsonl")
+
+# Use absolute paths for JSONL files to avoid path resolution issues
+# Convert OUTPUT_DIR to absolute path if it's relative
+if [[ "$OUTPUT_DIR" != /* ]]; then
+    # Relative path - make it absolute from project root
+    ABS_OUTPUT_DIR="$PROJECT_ROOT/$OUTPUT_DIR"
+else
+    # Already absolute
+    ABS_OUTPUT_DIR="$OUTPUT_DIR"
+fi
+GO_JSONL="$ABS_OUTPUT_DIR/go_specs_per_it.jsonl"
+PY_JSONL="$ABS_OUTPUT_DIR/py_specs_per_it.jsonl"
+
+# Combine JSONL files if both exist
+COMBINED_JSONL=""
+if [[ -f "$GO_JSONL" && -f "$PY_JSONL" ]]; then
+    COMBINED_JSONL="$ABS_OUTPUT_DIR/all_specs_per_it.jsonl"
+    cat "$GO_JSONL" "$PY_JSONL" > "$COMBINED_JSONL"
+    print_status "Combined Go and Python JSONL files for similarity analysis"
+elif [[ -f "$GO_JSONL" ]]; then
+    COMBINED_JSONL="$GO_JSONL"
+elif [[ -f "$PY_JSONL" ]]; then
+    COMBINED_JSONL="$PY_JSONL"
+fi
+
+if [[ -n "$COMBINED_JSONL" && -f "$COMBINED_JSONL" && -s "$COMBINED_JSONL" ]]; then
+    PER_IT_COUNT=$(wc -l < "$COMBINED_JSONL")
     print_success "Generated $PER_IT_COUNT per-It test specs"
     
     # Run the new markdown-aware similarity analysis
     print_status "Step 3b: Performing intelligent similarity analysis with BDD context..."
-    cd match
+    # Use PROJECT_ROOT to find match directory
+    MATCH_DIR="$PROJECT_ROOT/match"
+    if [[ -d "$MATCH_DIR" ]]; then
+        cd "$MATCH_DIR"
+    else
+        print_warning "match directory not found at $MATCH_DIR, skipping similarity analysis"
+        # Don't exit, just skip similarity analysis
+        MATCH_DIR=""
+    fi
     
     # Setup Python environment
     if [[ ! -d ".venv" ]]; then
@@ -228,7 +346,7 @@ if [[ -f "$OUTPUT_DIR/go_specs_per_it.jsonl" ]]; then
         fi
     fi
     
-    if [[ -d ".venv" && -f ".venv/bin/activate" ]]; then
+    if [[ -n "$MATCH_DIR" && -d "$MATCH_DIR/.venv" && -f "$MATCH_DIR/.venv/bin/activate" ]]; then
         print_status "Activating virtual environment..."
         if source .venv/bin/activate; then
             # Check if dependencies are available
@@ -251,25 +369,47 @@ if [[ -f "$OUTPUT_DIR/go_specs_per_it.jsonl" ]]; then
                 print_status "Running markdown-aware similarity analysis..."
                 
                 # Run with both JSONL and markdown data for enhanced context
+                ALL_REPO_ROOTS=("${GO_ROOTS[@]}" "${PY_ROOTS[@]}")
                 if python markdown-similarity.py \
-                    --jsonl "$OUTPUT_DIR/go_specs_per_it.jsonl" \
+                    --jsonl "$COMBINED_JSONL" \
                     --markdown "$OUTPUT_DIR/" \
                     --output "$OUTPUT_DIR/markdown_similarity_results.csv" \
-                    --repo-roots "${GO_ROOTS[@]}" \
+                    --repo-roots "${ALL_REPO_ROOTS[@]}" \
                     --threshold 0.75 \
                     --top-k 10 \
                     --exclude-same-file; then
                     
                     # Generate summary report
                     print_status "Generating markdown similarity summary..."
-                    cd match
+                    cd "$MATCH_DIR"
                     source .venv/bin/activate
-                    cd ..
+                    cd "$PROJECT_ROOT"
                     
-                    # Create summary generation script
+                    # Create summary generation script with match type analysis (per AGENTS.md)
                     cat > "$OUTPUT_DIR/generate_summary.py" << 'EOF'
 import pandas as pd
 import sys
+
+def is_python_file(file_path):
+    return str(file_path).endswith('.py')
+
+def is_go_file(file_path):
+    return str(file_path).endswith('.go')
+
+def get_match_type(row):
+    query_py = is_python_file(row['query_file'])
+    query_go = is_go_file(row['query_file'])
+    matched_py = is_python_file(row['matched_file'])
+    matched_go = is_go_file(row['matched_file'])
+    
+    if query_py and matched_py:
+        return 'Python↔Python'
+    elif query_go and matched_go:
+        return 'Go↔Go'
+    elif (query_py and matched_go) or (query_go and matched_py):
+        return 'Python↔Go'
+    else:
+        return 'Unknown'
 
 def generate_summary(csv_file, output_file):
     try:
@@ -284,36 +424,88 @@ def generate_summary(csv_file, output_file):
             f.write("# Similarity Analysis Results\n\nNo similarities found above threshold.\n")
         return
     
+    # Add match type column if not present (per AGENTS.md: Language-Agnostic Analysis)
+    if 'is_cross_language' in df.columns:
+        df['match_type'] = df.apply(
+            lambda row: 'Python↔Go' if row['is_cross_language'] else 
+                       ('Python↔Python' if is_python_file(row['query_file']) else 'Go↔Go'),
+            axis=1
+        )
+    else:
+        df['match_type'] = df.apply(get_match_type, axis=1)
+    
     # Calculate statistics
     avg_similarity = df['semantic_similarity'].mean()
     high_similarity = df[df['semantic_similarity'] > 0.9]
     medium_similarity = df[(df['semantic_similarity'] > 0.8) & (df['semantic_similarity'] <= 0.9)]
     
+    # Match type distribution (per AGENTS.md: Match Type Distribution)
+    match_type_counts = df['match_type'].value_counts()
+    total_matches = len(df)
+    intra_language = df[df['match_type'].isin(['Python↔Python', 'Go↔Go'])]
+    cross_language = df[df['match_type'] == 'Python↔Go']
+    
     with open(output_file, 'w') as f:
         f.write("# Cross-File BDD Test Similarity Analysis Results\n\n")
-        f.write(f"## Summary\n\n")
-        f.write(f"- **Total similarity matches**: {len(df)}\n")
+        f.write(f"**Analysis Type:** Language-agnostic similarity analysis\n\n")
+        f.write(f"## Executive Summary\n\n")
+        f.write(f"- **Total similarity matches**: {total_matches}\n")
         f.write(f"- **Average semantic similarity**: {avg_similarity:.3f}\n")
         f.write(f"- **High similarity matches (>0.9)**: {len(high_similarity)} (potential duplicates)\n")
         f.write(f"- **Medium similarity matches (0.8-0.9)**: {len(medium_similarity)} (related tests)\n")
         f.write(f"- **Files with similar tests**: {df['query_file'].nunique()}\n")
         f.write(f"- **Note**: Same-file matches are excluded to focus on meaningful cross-file similarities\n\n")
         
+        # Match Type Analysis (per AGENTS.md requirement)
+        f.write("## 🔄 Match Type Analysis\n\n")
+        f.write("### Match Type Distribution\n\n")
+        for match_type, count in match_type_counts.items():
+            percentage = (count / total_matches * 100) if total_matches > 0 else 0
+            f.write(f"- **{match_type}**: {count} matches ({percentage:.1f}%)\n")
+        
+        f.write(f"\n### Intra-Language vs Cross-Language\n\n")
+        intra_pct = (len(intra_language) / total_matches * 100) if total_matches > 0 else 0
+        cross_pct = (len(cross_language) / total_matches * 100) if total_matches > 0 else 0
+        f.write(f"- **Intra-language matches** (Python↔Python, Go↔Go): {len(intra_language)} ({intra_pct:.1f}%)\n")
+        f.write(f"- **Cross-language matches** (Python↔Go): {len(cross_language)} ({cross_pct:.1f}%)\n")
+        
+        if len(intra_language) > 0:
+            f.write(f"\n  - Average intra-language similarity: {intra_language['semantic_similarity'].mean():.3f}\n")
+        if len(cross_language) > 0:
+            f.write(f"\n  - Average cross-language similarity: {cross_language['semantic_similarity'].mean():.3f}\n")
+        
+        # Score Distribution (per AGENTS.md: Similarity Report Generation)
+        f.write(f"\n### Score Distribution\n\n")
+        f.write(f"- **Perfect duplicates (1.0)**: {len(df[df['semantic_similarity'] == 1.0])}\n")
+        f.write(f"- **Very high similarity (0.95-0.99)**: {len(df[(df['semantic_similarity'] >= 0.95) & (df['semantic_similarity'] < 1.0)])}\n")
+        f.write(f"- **High similarity (0.90-0.94)**: {len(df[(df['semantic_similarity'] >= 0.90) & (df['semantic_similarity'] < 0.95)])}\n")
+        f.write(f"- **Medium similarity (0.80-0.89)**: {len(df[(df['semantic_similarity'] >= 0.80) & (df['semantic_similarity'] < 0.90)])}\n")
+        f.write(f"- **Lower similarity (0.65-0.79)**: {len(df[(df['semantic_similarity'] >= 0.65) & (df['semantic_similarity'] < 0.80)])}\n")
+        
+        # Strategic Recommendations (per AGENTS.md)
+        f.write(f"\n### Strategic Recommendations\n\n")
         if len(high_similarity) > 0:
-            f.write("## Potential Test Duplicates (>0.9 similarity)\n\n")
-            f.write("| Test 1 | Test 2 | Similarity | File 1 | File 2 |\n")
-            f.write("|--------|--------|------------|--------|--------|\n")
+            f.write(f"- **{len(high_similarity)} potential duplicates** (>0.9 similarity) - consider consolidation\n")
+        if len(cross_language) > 0:
+            f.write(f"- **{len(cross_language)} cross-language matches** - opportunities for test pattern sharing between Python and Go implementations\n")
+        if len(intra_language) > len(cross_language) * 10:
+            f.write(f"- More intra-language matches found - potential for test consolidation within same language\n")
+        elif len(cross_language) > len(intra_language) * 0.1:
+            f.write(f"- Good cross-pollination opportunities between languages\n")
+        
+        if len(high_similarity) > 0:
+            f.write(f"\n## Potential Test Duplicates (>0.9 similarity)\n\n")
+            f.write("| Test 1 | Test 2 | Similarity | Match Type | File 1 | File 2 |\n")
+            f.write("|--------|--------|------------|------------|--------|--------|\n")
             
             for _, row in high_similarity.head(15).iterrows():
-                # Use the full normalized paths from CSV for consistency
                 f1 = row['query_file']
                 f2 = row['matched_file']
+                match_type = row.get('match_type', get_match_type(row))
                 
-                # Handle potentially missing descriptions and create meaningful differentiators
                 query_desc = str(row['query_description']) if pd.notna(row['query_description']) else "No description"
                 matched_desc = str(row['matched_description']) if pd.notna(row['matched_description']) else "No description"
                 
-                # If descriptions are identical, differentiate by test ID or context
                 if query_desc == matched_desc:
                     query_id = str(row['query_test_id']) if pd.notna(row['query_test_id']) else "unknown"
                     matched_id = str(row['matched_test_id']) if pd.notna(row['matched_test_id']) else "unknown"
@@ -323,11 +515,21 @@ def generate_summary(csv_file, output_file):
                     query_display = query_desc
                     matched_display = matched_desc
                 
-                # Truncate for display but ensure they're different
                 query_trunc = query_display[:40] + "..." if len(query_display) > 40 else query_display
                 matched_trunc = matched_display[:40] + "..." if len(matched_display) > 40 else matched_display
                 
-                f.write(f"| {query_trunc} | {matched_trunc} | {row['semantic_similarity']:.3f} | {f1} | {f2} |\n")
+                f.write(f"| {query_trunc} | {matched_trunc} | {row['semantic_similarity']:.3f} | {match_type} | {f1} | {f2} |\n")
+        
+        # Top Cross-Language Matches (if any)
+        if len(cross_language) > 0:
+            f.write(f"\n## Top Cross-Language Matches (Python↔Go)\n\n")
+            f.write("| Python Test | Go Test | Similarity |\n")
+            f.write("|-------------|---------|------------|\n")
+            top_cross = cross_language.nlargest(10, 'semantic_similarity')
+            for _, row in top_cross.iterrows():
+                py_desc = str(row['query_description'] if is_python_file(row['query_file']) else row['matched_description'])[:50]
+                go_desc = str(row['matched_description'] if is_python_file(row['query_file']) else row['query_description'])[:50]
+                f.write(f"| {py_desc}... | {go_desc}... | {row['semantic_similarity']:.3f} |\n")
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
@@ -367,7 +569,13 @@ print_success "Spec markdown generation completed!"
 print_status "Output files:"
 echo "  - $OUTPUT_DIR/ (Markdown specs organized by repository)"
 if [[ -f "$OUTPUT_DIR/go_specs_per_it.jsonl" ]]; then
-    echo "  - $OUTPUT_DIR/go_specs_per_it.jsonl (Per-It test specs in JSONL format)"
+    echo "  - $OUTPUT_DIR/go_specs_per_it.jsonl (Per-It test specs in JSONL format - Go)"
+fi
+if [[ -f "$OUTPUT_DIR/py_specs_per_it.jsonl" ]]; then
+    echo "  - $OUTPUT_DIR/py_specs_per_it.jsonl (Per-It test specs in JSONL format - Python)"
+fi
+if [[ -f "$OUTPUT_DIR/all_specs_per_it.jsonl" ]]; then
+    echo "  - $OUTPUT_DIR/all_specs_per_it.jsonl (Combined Go and Python specs)"
 fi
 if [[ -f "$OUTPUT_DIR/markdown_similarity_results.csv" ]]; then
     echo "  - $OUTPUT_DIR/markdown_similarity_results.csv (Detailed similarity analysis)"
@@ -384,7 +592,24 @@ for i in "${!GO_ROOTS[@]}"; do
     outdir="$OUTPUT_DIR/$repo_name"
     if [[ -d "$outdir" ]]; then
         repo_files=$(find "$outdir" -name "*.md" | wc -l)
-        echo "  - $repo_name: $repo_files files"
+        echo "  - $repo_name (Go): $repo_files files"
+    fi
+done
+for i in "${!PY_ROOTS[@]}"; do
+    py_root="${PY_ROOTS[$i]}"
+    # Extract repository name: if path ends with /src/eco_pytests, use parent dir name
+    # Otherwise use basename
+    if [[ "$py_root" == */src/eco_pytests ]]; then
+        repo_name=$(basename "$(dirname "$(dirname "$py_root")")")
+    else
+        repo_name=$(basename "$py_root")
+    fi
+    # Normalize: replace underscores with hyphens for consistency
+    repo_name=$(echo "$repo_name" | sed 's/_/-/g')
+    outdir="$OUTPUT_DIR/$repo_name"
+    if [[ -d "$outdir" ]]; then
+        repo_files=$(find "$outdir" -name "*.md" | wc -l)
+        echo "  - $repo_name (Python): $repo_files files"
     fi
 done
 
@@ -396,4 +621,4 @@ if [[ "$VERBOSE" == "true" ]]; then
 fi
 
 echo
-print_success "Ginkgo spec markdown generation completed!"
+print_success "Spec markdown generation completed!"

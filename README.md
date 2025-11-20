@@ -1027,9 +1027,87 @@ KubeSpecs → Embeddings → Similarity Search → Purpose Filtering → Scoring
 ### **Key Components**
 
 - **`go-extractor/main.go`**: Go AST parser with Ginkgo/eco-goinfra support
+- **`go-extractor/spec-extractor/`**: Go spec markdown extractor (generates markdown + JSONL)
 - **`py-extractor/extract_kubespec.py`**: Python AST parser with pytest/openshift support
+- **`py-extractor/spec_extractor/`**: Python spec markdown extractor (generates markdown + JSONL)
 - **`match/build_index_and_match.py`**: Semantic matching with purpose-based filtering
 - **`extract-and-match.sh`**: Automated pipeline orchestration
+- **`extract-spec-md.sh`**: Markdown spec generator with similarity analysis
+
+## 📝 Markdown Spec Extraction
+
+### **Overview**
+
+The project includes spec extractors that generate human-readable markdown documentation and JSONL files from test files. These are compatible with the similarity matching system and can be used for cross-language test analysis.
+
+### **Go Spec Extractor**
+
+```bash
+# Generate markdown specs from Go test repositories
+./extract-spec-md.sh -g /path/to/eco-gotests
+
+# Multiple repositories
+./extract-spec-md.sh -g /path/to/eco-gotests -g /path/to/openshift-tests
+```
+
+**Output:**
+- `spec-md/{repo_name}/` - Markdown files for each test file
+- `go_specs_per_it.jsonl` - Per-test JSONL records for similarity matching
+
+**Features:**
+- Extracts Ginkgo BDD structure (Describe, Context, When, It blocks)
+- Extracts `By(...)` steps as test actions
+- Handles BeforeEach/AfterEach setup/teardown
+- Supports parametrized tests (Entry)
+- Generates markdown matching exact format for compatibility
+
+### **Python Spec Extractor**
+
+```bash
+# Generate markdown specs from Python test repositories
+./extract-spec-md.sh -p /path/to/eco-pytests
+
+# Both Go and Python for cross-language similarity
+./extract-spec-md.sh -g /path/to/eco-gotests -p /path/to/eco-pytests
+```
+
+**Output:**
+- `spec-md/{repo_name}/` - Markdown files for each test file
+- `py_specs_per_it.jsonl` - Per-test JSONL records for similarity matching
+- `all_specs_per_it.jsonl` - Combined Go and Python specs (when both are provided)
+
+**Features:**
+- Extracts pytest test functions (`test_*`)
+- Extracts test classes as containers
+- Handles pytest fixtures as setup/teardown
+- Extracts function body operations as steps
+- Supports parametrized tests
+- Generates markdown matching Go extractor format exactly
+
+**Structure Compatibility:**
+- Uses same Container/TestCase/TestStep data structures as Go extractor
+- Generates JSONL in same PerItRecord format
+- Compatible with `markdown-similarity.py` and `build_index_and_match.py`
+- Enables cross-language similarity matching (Go↔Python)
+
+### **Similarity Analysis with Markdown Specs**
+
+The `extract-spec-md.sh` script automatically runs similarity analysis:
+
+```bash
+./extract-spec-md.sh -g /path/to/eco-gotests -p /path/to/eco-pytests
+```
+
+This generates:
+- Markdown specs for all repositories
+- JSONL files for similarity matching
+- `markdown_similarity_results.csv` - Detailed similarity analysis
+- `similarity_analysis.md` - Human-readable similarity report
+
+The similarity analysis uses semantic embeddings to find similar tests across languages, enabling discovery of:
+- Duplicate tests in different languages
+- Similar test patterns that could be consolidated
+- Cross-language test opportunities
 
 ## 🔧 Configuration
 
