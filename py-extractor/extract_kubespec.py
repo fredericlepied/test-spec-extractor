@@ -3,6 +3,7 @@
 # py-extractor/extract_kubespec.py
 import argparse, ast, json, os, re
 from pathlib import Path
+from typing import Optional, Dict, List
 
 VERB_PREFIXES = ("create_", "patch_", "delete_", "read_", "list_", "replace_", "watch_")
 CLI_RE = re.compile(r"\b(oc|kubectl)\b")
@@ -312,12 +313,12 @@ def extract_context_from_function_name(func_name: str) -> list:
     name = re.sub(r"^test_?", "", func_name.lower())
     # Split on underscores
     parts = name.split("_")
-    
+
     # Look for BDD keywords (when, given, then, and, but)
     bdd_keywords = {"when", "given", "then", "and", "but"}
     found_keyword = False
     start_idx = 0
-    
+
     for i, part in enumerate(parts):
         if part in bdd_keywords:
             # Found a BDD keyword - extract the description after it
@@ -329,14 +330,14 @@ def extract_context_from_function_name(func_name: str) -> list:
                         context.append(desc)
                         found_keyword = True
             break
-    
+
     # If no BDD keyword found, use the whole name (without test prefix) as context
     if not found_keyword and name:
         # Skip common test suffixes
         name = re.sub(r"_(test|spec|should)$", "", name)
         if name:
             context.append(name.replace("_", " "))
-    
+
     return context
 
 
@@ -1011,9 +1012,10 @@ def extract_assertion_expectation(assert_node: ast.Assert) -> dict:
 
 
 class TestVisitor(ast.NodeVisitor):
-    def __init__(self, path, root_path):
+    def __init__(self, path, root_path, resolver: Optional[FunctionResolver] = None):
         self.path = path
         self.root_path = root_path
+        self.resolver = resolver
         self.specs = []
         self.imports = {}  # Track imports for cross-file detection
         self.imported_modules = set()  # Track imported modules
@@ -1021,6 +1023,12 @@ class TestVisitor(ast.NodeVisitor):
         self.class_setup_ops = {}  # Track class-level setup: {class_name: operations}
         self.class_teardown_ops = {}  # Track class-level teardown: {class_name: operations}
         self.current_class = None  # Track current class being processed
+        # Read source code for expansion
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self.source = f.read()
+        except Exception:
+            self.source = ""
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
         # First, check if this is a pytest fixture (not a test function)
@@ -1081,7 +1089,7 @@ class TestVisitor(ast.NodeVisitor):
         # Create test_id with basename substitution
         basename = os.path.basename(self.root_path)
         relative_path = os.path.relpath(self.path, self.root_path)
-        
+
         # Extract context from various sources
         context = []
         # 1. Extract from class name if test is in a class
@@ -1089,15 +1097,15 @@ class TestVisitor(ast.NodeVisitor):
             class_context = camelcase_to_words(self.current_class)
             if class_context:
                 context.append(class_context)
-        
+
         # 2. Extract from function name (handles test_when_* patterns)
         func_context = extract_context_from_function_name(node.name)
         context.extend(func_context)
-        
+
         # 3. Extract from decorators (BDD markers, pytest markers)
         decorator_context = extract_context_from_decorators(node.decorator_list)
         context.extend(decorator_context)
-        
+
         # 4. Extract from docstring if it describes context
         docstring = ast.get_docstring(node)
         if docstring:
@@ -1111,7 +1119,7 @@ class TestVisitor(ast.NodeVisitor):
                     context_desc = when_match.group(1).strip()
                     if context_desc:
                         context.append(context_desc)
-        
+
         spec = {
             "test_id": f"{basename}/{relative_path}:{node.name}",
             "test_type": "unknown",
@@ -1127,6 +1135,7 @@ class TestVisitor(ast.NodeVisitor):
             "by_steps": [],  # Track operations in By(...) steps
             "prereq": [],  # Prerequisites: resources created in setup phase (unique GVKs from setup actions)
             "context": context,  # Context hierarchy (language-agnostic, no framework prefixes) - always present
+            "expanded_code": "",  # Expanded code for entire test function
         }
 
         # Tag test body operations with "test" phase
@@ -1419,7 +1428,7 @@ class TestVisitor(ast.NodeVisitor):
 
         # Analyze By steps for more granular operation tracking
         if has_ginkgo_patterns:
-            by_steps = analyze_by_steps_in_file(node)
+            by_steps = analyze_by_steps_in_file(node, self.resolver, self.path, self.source)
             spec["by_steps"] = by_steps
         elif has_step_patterns:
             # Use non-Ginkgo step patterns
@@ -1454,6 +1463,21 @@ class TestVisitor(ast.NodeVisitor):
         spec["purpose"] = detect_purpose(
             node.name, docstring, spec["actions"], spec["expectations"]
         )
+
+        # Expand code for entire test function if resolver is available
+        if self.resolver:
+            visited = {}
+            expanded_code = expand_code_up_to_k8s_calls(
+                node,
+                self.resolver,
+                self.path,
+                self.source,
+                visited,
+                0,
+                5,
+            )
+            if expanded_code:
+                spec["expanded_code"] = expanded_code
 
         self.specs.append(spec)
 
@@ -1525,7 +1549,7 @@ class TestVisitor(ast.NodeVisitor):
                 # Create test_id with basename substitution
                 basename = os.path.basename(self.root_path)
                 relative_path = os.path.relpath(self.path, self.root_path)
-                
+
                 # Extract context from various sources
                 context = []
                 # 1. Extract from class name
@@ -1533,15 +1557,15 @@ class TestVisitor(ast.NodeVisitor):
                     class_context = camelcase_to_words(self.current_class)
                     if class_context:
                         context.append(class_context)
-                
+
                 # 2. Extract from function name (handles test_when_* patterns)
                 func_context = extract_context_from_function_name(item.name)
                 context.extend(func_context)
-                
+
                 # 3. Extract from decorators (BDD markers, pytest markers)
                 decorator_context = extract_context_from_decorators(item.decorator_list)
                 context.extend(decorator_context)
-                
+
                 # 4. Extract from docstring if it describes context
                 docstring = ast.get_docstring(item)
                 if docstring:
@@ -1550,12 +1574,14 @@ class TestVisitor(ast.NodeVisitor):
                     if "when" in docstring_lower or "given" in docstring_lower:
                         # Try to extract context from docstring
                         # Simple extraction: look for "When X" or "Given X" patterns
-                        when_match = re.search(r"(?i)(?:when|given|then)\s+(.+?)(?:\.|$|\n)", docstring)
+                        when_match = re.search(
+                            r"(?i)(?:when|given|then)\s+(.+?)(?:\.|$|\n)", docstring
+                        )
                         if when_match:
                             context_desc = when_match.group(1).strip()
                             if context_desc:
                                 context.append(context_desc)
-                
+
                 spec = {
                     "test_id": f"{basename}/{relative_path}:{node.name}.{item.name}",
                     "test_type": "unit",  # Class-based tests are typically unit tests
@@ -1571,6 +1597,7 @@ class TestVisitor(ast.NodeVisitor):
                     "by_steps": [],  # Track operations in By(...) steps
                     "prereq": [],  # Prerequisites: resources created in setup phase (unique GVKs from setup actions)
                     "context": context,  # Context hierarchy (language-agnostic, no framework prefixes) - always present
+                    "expanded_code": "",  # Expanded code for entire test function
                 }
 
                 # Extract docstring
@@ -1777,7 +1804,7 @@ class TestVisitor(ast.NodeVisitor):
                         break
 
                 if has_ginkgo_patterns:
-                    by_steps = analyze_by_steps_in_file(item)
+                    by_steps = analyze_by_steps_in_file(item, self.resolver, self.path, self.source)
                     spec["by_steps"] = by_steps
                 elif has_step_patterns:
                     # Use non-Ginkgo step patterns
@@ -2508,7 +2535,214 @@ def analyze_node_for_operations(node: ast.AST) -> list:
     return operations
 
 
-def analyze_by_steps_in_file(tree: ast.AST) -> list:
+class FunctionResolver:
+    """Tracks function definitions across files for code expansion"""
+
+    def __init__(self, root_path: str):
+        self.functions: Dict[str, ast.FunctionDef] = {}
+        self.methods: Dict[str, Dict[str, ast.FunctionDef]] = {}
+        self.imports: Dict[str, Dict[str, str]] = {}
+        self.files: Dict[str, ast.AST] = {}
+        self.root_path = root_path
+
+    def build_index(self) -> None:
+        """Parse all Python files and build the function index"""
+        for py_file in Path(self.root_path).rglob("*.py"):
+            file_str = str(py_file)
+            # Skip common directories
+            if (
+                "__pycache__" in file_str
+                or "/testdata/" in file_str
+                or file_str.endswith("_testdata")
+            ):
+                continue
+
+            try:
+                with open(py_file, "r", encoding="utf-8") as f:
+                    source = f.read()
+                tree = ast.parse(source, filename=file_str)
+                self.files[file_str] = tree
+
+                # Extract imports
+                import_map = {}
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            import_map[alias.asname or alias.name] = alias.name
+                    elif isinstance(node, ast.ImportFrom):
+                        module = node.module or ""
+                        for alias in node.names:
+                            import_map[alias.asname or alias.name] = f"{module}.{alias.name}"
+
+                self.imports[file_str] = import_map
+
+                # Extract function definitions
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.FunctionDef):
+                        if node.name:
+                            self.functions[node.name] = node
+                    elif isinstance(node, ast.ClassDef):
+                        # Extract methods
+                        for item in node.body:
+                            if isinstance(item, ast.FunctionDef):
+                                if node.name not in self.methods:
+                                    self.methods[node.name] = {}
+                                self.methods[node.name][item.name] = item
+
+            except Exception:
+                continue  # Skip files we can't parse
+
+    def resolve_function(self, call: ast.Call, file_path: str) -> Optional[ast.FunctionDef]:
+        """Find the function definition for a call"""
+        if isinstance(call.func, ast.Name):
+            # Direct function call: func_name()
+            if call.func.id in self.functions:
+                return self.functions[call.func.id]
+        elif isinstance(call.func, ast.Attribute):
+            # Method call: obj.method()
+            if isinstance(call.func.value, ast.Name):
+                obj_name = call.func.value.id
+                method_name = call.func.attr
+                # Try exact match first (e.g., pods.Create() -> Pods.Create())
+                capitalized_obj = obj_name.capitalize()
+                if capitalized_obj in self.methods and method_name in self.methods[capitalized_obj]:
+                    return self.methods[capitalized_obj][method_name]
+
+                # Try lowercase match (e.g., pods.Create() -> pods.Create())
+                if obj_name in self.methods and method_name in self.methods[obj_name]:
+                    return self.methods[obj_name][method_name]
+
+                # Try all method maps - find any method with matching name
+                # This handles cases where the receiver type doesn't match exactly
+                for class_name, methods in self.methods.items():
+                    if method_name in methods:
+                        # Check if obj name matches receiver type (case-insensitive or partial match)
+                        class_lower = class_name.lower()
+                        obj_lower = obj_name.lower()
+                        if (
+                            class_lower == obj_lower
+                            or class_lower.startswith(obj_lower)
+                            or obj_lower.startswith(class_lower)
+                        ):
+                            return methods[method_name]
+        return None
+
+
+def is_k8s_call(call: ast.Call) -> bool:
+    """Check if a call expression is an actual k8s/ocp API call (not a helper method)
+
+    This should only return True for direct k8s API calls, not helper methods
+    that wrap them. Helper methods should be expanded until reaching actual k8s calls.
+    """
+    # Check for CLI commands
+    if isinstance(call.func, ast.Attribute) and call.func.attr in {
+        "run",
+        "check_call",
+        "check_output",
+    }:
+        if isinstance(call.func.value, ast.Name) and call.func.value.id == "subprocess":
+            args = []
+            for a in call.args:
+                if isinstance(a, ast.List):
+                    for el in a.elts:
+                        if isinstance(el, ast.Constant):
+                            args.append(str(el.value))
+                elif isinstance(a, ast.Constant):
+                    args.append(str(a.value))
+            cmd = " ".join(args)
+            if CLI_RE.search(cmd):
+                return True
+
+    # Check for helper function patterns that map to k8s operations
+    # This would need to check against known helper function patterns
+    # For now, we'll rely on the operation detection logic
+
+    return False
+
+
+def expand_code_up_to_k8s_calls(
+    node: ast.AST,
+    resolver: Optional[FunctionResolver],
+    file_path: str,
+    source: str,
+    visited: Dict[str, bool],
+    depth: int,
+    max_depth: int = 5,
+) -> str:
+    """Recursively expand function calls until reaching k8s/ocp calls"""
+    if depth > max_depth or resolver is None:
+        return ""
+
+    try:
+        # Use ast.unparse if available (Python 3.9+), otherwise use astor or manual conversion
+        try:
+            import ast
+
+            # Try to use ast.unparse (Python 3.9+)
+            if hasattr(ast, "unparse"):
+                code = ast.unparse(node)
+            else:
+                # Fallback: use line numbers to extract from source
+                if hasattr(node, "lineno") and hasattr(node, "end_lineno"):
+                    lines = source.split("\n")
+                    start_line = node.lineno - 1
+                    end_line = node.end_lineno
+                    code = "\n".join(lines[start_line:end_line])
+                else:
+                    code = ""
+        except Exception:
+            code = ""
+
+        result_lines = []
+        lines = code.split("\n") if code else []
+
+        # Walk the AST to find function calls
+        for child_node in ast.walk(node):
+            if isinstance(child_node, ast.Call):
+                # Check if it's a k8s call - stop expansion
+                if is_k8s_call(child_node):
+                    continue  # Keep original call
+
+                # Try to resolve and expand the function
+                fn = resolver.resolve_function(child_node, file_path)
+                if fn is not None and fn.body:
+                    # Create a unique key for cycle detection
+                    func_key = f"{file_path}:{fn.lineno}"
+                    if func_key in visited:
+                        continue  # Cycle detected - keep original call
+
+                    # Mark as visited
+                    visited[func_key] = True
+
+                    # Expand the function body
+                    expanded = expand_code_up_to_k8s_calls(
+                        ast.Module(body=fn.body, type_ignores=[]),
+                        resolver,
+                        file_path,
+                        source,
+                        visited,
+                        depth + 1,
+                        max_depth,
+                    )
+                    if expanded:
+                        result_lines.append(f"# Expanded: {fn.name}")
+                        result_lines.append(expanded)
+
+                    # Unmark visited for this path
+                    del visited[func_key]
+
+        return "\n".join(result_lines) if result_lines else code
+
+    except Exception:
+        return ""
+
+
+def analyze_by_steps_in_file(
+    tree: ast.AST,
+    resolver: Optional[FunctionResolver] = None,
+    file_path: str = "",
+    source: str = "",
+) -> list:
     """Analyze a file to find By(...) calls and their associated operations"""
     by_steps = []
 
@@ -2521,10 +2755,32 @@ def analyze_by_steps_in_file(tree: ast.AST) -> list:
             for operation in operations:
                 operation["by_step"] = description
 
+            # Expand code if resolver is available
+            expanded_code = ""
+            if resolver and hasattr(node, "args") and len(node.args) >= 2:
+                # By("description", lambda: ...) - second arg is the function
+                func_node = node.args[1] if len(node.args) > 1 else None
+                if isinstance(func_node, ast.Lambda) or (
+                    isinstance(func_node, ast.Call) and hasattr(func_node, "func")
+                ):
+                    visited = {}
+                    expanded = expand_code_up_to_k8s_calls(
+                        func_node,
+                        resolver,
+                        file_path,
+                        source,
+                        visited,
+                        0,
+                        5,
+                    )
+                    if expanded:
+                        expanded_code = expanded
+
             by_step = {
                 "description": description,
                 "actions": operations,
                 "line": getattr(node, "lineno", 0),
+                "expanded_code": expanded_code,
             }
             by_steps.append(by_step)
 
@@ -2809,9 +3065,95 @@ def infer_purpose_from_operations(actions: list) -> str:
     return "RESOURCE_VALIDATION"
 
 
+def export_expanded_code(spec: dict, output_dir: str, file_path: str, root_path: str) -> None:
+    """Write expanded code to individual files"""
+    if not output_dir:
+        return  # Skip if no output directory specified
+
+    # Check if there's any expanded code to export (either in By steps or test function)
+    has_expanded_code = bool(spec.get("expanded_code", ""))
+    if not has_expanded_code:
+        by_steps = spec.get("by_steps", [])
+        for by_step in by_steps:
+            if by_step.get("expanded_code", ""):
+                has_expanded_code = True
+                break
+    if not has_expanded_code:
+        return  # Skip if no expanded code to export
+
+    # Calculate relative path from repository root (baseline only)
+    try:
+        rel_path = os.path.relpath(file_path, root_path)
+        # Prepend repository basename to maintain structure
+        repo_name = os.path.basename(root_path)
+        rel_path = os.path.join(repo_name, rel_path)
+    except ValueError:
+        # If relative path calculation fails, use basename of root as fallback
+        repo_name = os.path.basename(root_path)
+        rel_path = file_path.replace(root_path, "").lstrip("/")
+        rel_path = os.path.join(repo_name, rel_path)
+
+    rel_dir = os.path.dirname(rel_path)
+    out_dir = os.path.join(output_dir, rel_dir)
+
+    # Create directory when we have content to write
+    os.makedirs(out_dir, exist_ok=True)
+
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    test_id = spec.get("test_id", "unknown").replace("/", "_").replace(":", "_")
+
+    # Export entire test function expanded code if available
+    expanded_code = spec.get("expanded_code", "")
+    if expanded_code:
+        filename = f"{base_name}_{test_id}_expanded.py"
+        file_path_out = os.path.join(out_dir, filename)
+        content = f"""# Expanded Test Code
+# Original Test: {spec.get("test_id", "unknown")}
+# Full Test Function Code with Functions Expanded
+
+{expanded_code}
+"""
+
+        with open(file_path_out, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    # Export By steps
+    by_steps = spec.get("by_steps", [])
+    for i, by_step in enumerate(by_steps):
+        expanded_code = by_step.get("expanded_code", "")
+        if not expanded_code:
+            continue
+
+        filename = f"{base_name}_{test_id}_by_{i}.py"
+        file_path_out = os.path.join(out_dir, filename)
+        content = f"""# Expanded Test Code
+# Original Test: {spec.get("test_id", "unknown")}
+# By Step: {by_step.get("description", "")}
+# Line: {by_step.get("line", 0)}
+# Functions Expanded: See expanded code below
+
+{expanded_code}
+"""
+
+        with open(file_path_out, "w", encoding="utf-8") as f:
+            f.write(content)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
+    ap.add_argument(
+        "--expand-functions",
+        action="store_true",
+        default=True,
+        help="expand function calls up to k8s/ocp calls",
+    )
+    ap.add_argument(
+        "--export-expanded", action="store_true", help="export expanded code to individual files"
+    )
+    ap.add_argument(
+        "--expanded-output-dir", default="", help="output directory for expanded code files"
+    )
     args = ap.parse_args()
 
     for root, _, files in os.walk(args.root):
@@ -2822,9 +3164,21 @@ def main():
             try:
                 src = Path(path).read_text(encoding="utf-8")
                 tree = ast.parse(src, filename=path)
-                v = TestVisitor(path, args.root)
+                # Initialize function resolver if expansion is enabled
+                resolver = None
+                if getattr(args, "expand_functions", True):
+                    resolver = FunctionResolver(args.root)
+                    resolver.build_index()
+                v = TestVisitor(path, args.root, resolver)
                 v.visit(tree)
                 for spec in v.specs:
+                    # Export expanded code if requested
+                    if args.export_expanded:
+                        expanded_dir = args.expanded_output_dir
+                        if not expanded_dir:
+                            expanded_dir = os.path.join(os.path.dirname(path), "expanded_code")
+                        export_expanded_code(spec, expanded_dir, path, args.root)
+
                     print(json.dumps(spec, ensure_ascii=False))
             except Exception:
                 continue

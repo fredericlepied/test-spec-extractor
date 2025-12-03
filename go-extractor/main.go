@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -16,22 +17,24 @@ import (
 )
 
 type Action struct {
-	GVK       string                 `json:"gvk,omitempty"`
-	Verb      string                 `json:"verb,omitempty"`
-	NS        string                 `json:"ns,omitempty"`
-	Selector  map[string]interface{} `json:"selector,omitempty"`
-	Fields    map[string]interface{} `json:"fields,omitempty"`
-	Condition string                 `json:"condition,omitempty"`
-	Count     int                    `json:"count,omitempty"`
-	ByStep    string                 `json:"by_step,omitempty"`   // Track which By(...) step this action belongs to
-	Phase     string                 `json:"phase,omitempty"`     // Track phase: "setup", "test", "teardown", or empty for backwards compatibility
-	Resources []string               `json:"resources,omitempty"` // Resources involved in this action (GVKs)
+	GVK          string                 `json:"gvk,omitempty"`
+	Verb         string                 `json:"verb,omitempty"`
+	NS           string                 `json:"ns,omitempty"`
+	Selector     map[string]interface{} `json:"selector,omitempty"`
+	Fields       map[string]interface{} `json:"fields,omitempty"`
+	Condition    string                 `json:"condition,omitempty"`
+	Count        int                    `json:"count,omitempty"`
+	ByStep       string                 `json:"by_step,omitempty"`       // Track which By(...) step this action belongs to
+	Phase        string                 `json:"phase,omitempty"`         // Track phase: "setup", "test", "teardown", or empty for backwards compatibility
+	Resources    []string               `json:"resources,omitempty"`     // Resources involved in this action (GVKs)
+	ExpandedCode string                 `json:"expanded_code,omitempty"` // Code leading to this action with functions expanded
 }
 
 type ByStep struct {
-	Description string   `json:"description"`
-	Actions     []Action `json:"actions"`
-	Line        int      `json:"line,omitempty"`
+	Description  string   `json:"description"`
+	Actions      []Action `json:"actions"`
+	Line         int      `json:"line,omitempty"`
+	ExpandedCode string   `json:"expanded_code,omitempty"` // Code with functions expanded
 }
 
 // DescribeScope represents a Describe/When block and its nested structure
@@ -65,10 +68,11 @@ type KubeSpec struct {
 	Concurrency       []string      `json:"concurrency"`
 	Artifacts         []string      `json:"artifacts"`
 	Purpose           string        `json:"purpose"`
-	Tech              []string      `json:"tech"`               // SR-IOV, PTP, DPDK, GPU, Virtualization, Storage, etc.
-	BySteps           []ByStep      `json:"by_steps,omitempty"` // Track operations in By(...) steps
-	Prereq            []string      `json:"prereq"`             // Prerequisites: resources created in setup phase (unique GVKs from setup actions) - always present
-	Context           []string      `json:"context"`            // Context hierarchy from Describe/When blocks (language-agnostic, no prefixes) - always present
+	Tech              []string      `json:"tech"`                    // SR-IOV, PTP, DPDK, GPU, Virtualization, Storage, etc.
+	BySteps           []ByStep      `json:"by_steps,omitempty"`      // Track operations in By(...) steps
+	Prereq            []string      `json:"prereq"`                  // Prerequisites: resources created in setup phase (unique GVKs from setup actions) - always present
+	Context           []string      `json:"context"`                 // Context hierarchy from Describe/When blocks (language-agnostic, no prefixes) - always present
+	ExpandedCode      string        `json:"expanded_code,omitempty"` // Expanded code for entire It block
 }
 
 // MarshalJSON ensures that nil slices are marshaled as empty arrays instead of null
@@ -1364,8 +1368,9 @@ func isBlockingCall(call *ast.CallExpr) bool {
 }
 
 // findOperationsAfterBy finds all operations that occur after a By(...) call
-func findOperationsAfterBy(byCall *ast.CallExpr, fset *token.FileSet, parentNode ast.Node) []Action {
+func findOperationsAfterBy(byCall *ast.CallExpr, fset *token.FileSet, parentNode ast.Node, resolver *FunctionResolver, file *ast.File, filePath string) ([]Action, string) {
 	var operations []Action
+	var expandedCode string
 
 	// For By(...) calls, we need to look at the function passed as the second argument
 	// By("description", func() { ... })
@@ -1373,10 +1378,24 @@ func findOperationsAfterBy(byCall *ast.CallExpr, fset *token.FileSet, parentNode
 		if funcLit, ok := byCall.Args[1].(*ast.FuncLit); ok {
 			// Analyze the function body for operations
 			operations = analyzeStatementForOperations(funcLit.Body, fset)
+
+			// Expand code if resolver is available
+			if resolver != nil {
+				visited := make(map[string]bool)
+				expanded, err := expandCodeUpToK8sCalls(funcLit.Body, fset, resolver, file, filePath, visited, 0, 5)
+				if err == nil {
+					formatted, err := formatCode(expanded)
+					if err == nil {
+						expandedCode = formatted
+					} else {
+						expandedCode = expanded
+					}
+				}
+			}
 		}
 	}
 
-	return operations
+	return operations, expandedCode
 }
 
 // findOperationsInBeforeEach finds Kubernetes operations within a BeforeEach(...) block
@@ -1587,7 +1606,7 @@ func analyzeStatementForOperations(stmt ast.Stmt, fset *token.FileSet) []Action 
 }
 
 // analyzeBySteps analyzes a file to find By(...) calls and their associated operations
-func analyzeBySteps(f *ast.File, fset *token.FileSet) []ByStep {
+func analyzeBySteps(f *ast.File, fset *token.FileSet, resolver *FunctionResolver, filePath string) []ByStep {
 	var bySteps []ByStep
 
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -1595,8 +1614,8 @@ func analyzeBySteps(f *ast.File, fset *token.FileSet) []ByStep {
 			description := extractByStepDescription(call)
 			line := fset.Position(call.Pos()).Line
 
-			// Find operations that occur after this By call
-			operations := findOperationsAfterBy(call, fset, f)
+			// Find operations that occur after this By call and expand code
+			operations, expandedCode := findOperationsAfterBy(call, fset, f, resolver, f, filePath)
 
 			// Add By step information to each action
 			for i := range operations {
@@ -1604,9 +1623,72 @@ func analyzeBySteps(f *ast.File, fset *token.FileSet) []ByStep {
 			}
 
 			byStep := ByStep{
-				Description: description,
-				Actions:     operations,
-				Line:        line,
+				Description:  description,
+				Actions:      operations,
+				Line:         line,
+				ExpandedCode: expandedCode,
+			}
+			bySteps = append(bySteps, byStep)
+		}
+		return true
+	})
+
+	return bySteps
+}
+
+// analyzeByStepsInItBlock analyzes By steps within a specific It block and expands code
+func analyzeByStepsInItBlock(itCall *ast.CallExpr, fset *token.FileSet, resolver *FunctionResolver, file *ast.File, filePath string) []ByStep {
+	var bySteps []ByStep
+
+	// Get the It block's function literal
+	var itFuncLit *ast.FuncLit
+	for _, arg := range itCall.Args {
+		if fl, ok := arg.(*ast.FuncLit); ok {
+			itFuncLit = fl
+			break
+		}
+	}
+
+	if itFuncLit == nil {
+		return bySteps
+	}
+
+	// Find all By calls within this It block
+	ast.Inspect(itFuncLit.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && isByCall(call) {
+			description := extractByStepDescription(call)
+			line := fset.Position(call.Pos()).Line
+
+			// Find operations and expand code
+			operations, expandedCode := findOperationsAfterBy(call, fset, itFuncLit.Body, resolver, file, filePath)
+
+			// If By step doesn't have a function literal, try to expand code from the It block
+			// that follows this By call
+			if expandedCode == "" && resolver != nil {
+				// Find code after this By call in the It block
+				// This is a simplified approach - in practice we'd need to track statement positions
+				visited := make(map[string]bool)
+				expanded, err := expandCodeUpToK8sCalls(itFuncLit.Body, fset, resolver, file, filePath, visited, 0, 5)
+				if err == nil && expanded != "" {
+					formatted, err := formatCode(expanded)
+					if err == nil {
+						expandedCode = formatted
+					} else {
+						expandedCode = expanded
+					}
+				}
+			}
+
+			// Add By step information to each action
+			for i := range operations {
+				operations[i].ByStep = description
+			}
+
+			byStep := ByStep{
+				Description:  description,
+				Actions:      operations,
+				Line:         line,
+				ExpandedCode: expandedCode,
 			}
 			bySteps = append(bySteps, byStep)
 		}
@@ -1814,7 +1896,7 @@ func collectTeardownOperations(scope *DescribeScope) []Action {
 }
 
 // extractItBlocks extracts individual It(...) blocks from a Ginkgo test file
-func extractItBlocks(f *ast.File, fset *token.FileSet, filePath, rootPath string) []KubeSpec {
+func extractItBlocks(f *ast.File, fset *token.FileSet, filePath, rootPath string, resolver *FunctionResolver) []KubeSpec {
 	var specs []KubeSpec
 
 	// Build the Describe scope tree
@@ -1918,6 +2000,36 @@ func extractItBlocks(f *ast.File, fset *token.FileSet, filePath, rootPath string
 
 			// Analyze the It block for additional patterns
 			analyzeItBlock(call, &spec, fset)
+
+			// Analyze By steps for this It block and expand code
+			if resolver != nil {
+				// Get the It block's function literal for expansion
+				var itFuncLit *ast.FuncLit
+				for _, arg := range call.Args {
+					if fl, ok := arg.(*ast.FuncLit); ok {
+						itFuncLit = fl
+						break
+					}
+				}
+
+				// Analyze By steps
+				bySteps := analyzeByStepsInItBlock(call, fset, resolver, f, filePath)
+				spec.BySteps = bySteps
+
+				// Also expand the entire It block code if it has a function literal
+				if itFuncLit != nil {
+					visited := make(map[string]bool)
+					expandedItCode, err := expandCodeUpToK8sCalls(itFuncLit.Body, fset, resolver, f, filePath, visited, 0, 5)
+					if err == nil && expandedItCode != "" {
+						formatted, err := formatCode(expandedItCode)
+						if err == nil {
+							spec.ExpandedCode = formatted
+						} else {
+							spec.ExpandedCode = expandedItCode
+						}
+					}
+				}
+			}
 
 			// Ensure all operations are tagged with phase (default to "test" for operations from analyzeItBlock)
 			// CRITICAL: Only set phase to "test" if it's empty - don't overwrite "setup" or "teardown" phases
@@ -2434,12 +2546,821 @@ func mapCommandToAPI(cmd string) (gvk string, verb string) {
 	return "", ""
 }
 
+// FunctionResolver tracks function definitions across files for code expansion
+type FunctionResolver struct {
+	functions    map[string]*ast.FuncDecl            // function name -> definition (same package)
+	packageFuncs map[string]map[string]*ast.FuncDecl // package path -> function name -> definition (cross-package)
+	methods      map[string]map[string]*ast.FuncDecl // receiver type -> method name -> definition
+	imports      map[string]map[string]string        // file -> import alias -> package path
+	files        map[string]*ast.File                // file path -> parsed AST
+	packagePaths map[string]string                   // file path -> package import path
+	fset         *token.FileSet                      // file set for position tracking
+	rootPath     string                              // root path of the repository
+	moduleName   string                              // module name from go.mod (e.g., github.com/rh-ecosystem-edge/eco-gotests)
+}
+
+// NewFunctionResolver creates a new FunctionResolver
+func NewFunctionResolver(rootPath string) *FunctionResolver {
+	fr := &FunctionResolver{
+		functions:    make(map[string]*ast.FuncDecl),
+		packageFuncs: make(map[string]map[string]*ast.FuncDecl),
+		methods:      make(map[string]map[string]*ast.FuncDecl),
+		imports:      make(map[string]map[string]string),
+		files:        make(map[string]*ast.File),
+		packagePaths: make(map[string]string),
+		fset:         token.NewFileSet(),
+		rootPath:     rootPath,
+		moduleName:   "",
+	}
+
+	// Try to read go.mod to get module name
+	goModPath := filepath.Join(rootPath, "go.mod")
+	if data, err := os.ReadFile(goModPath); err == nil {
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "module ") {
+				fr.moduleName = strings.TrimSpace(strings.TrimPrefix(line, "module "))
+				break
+			}
+		}
+	}
+
+	return fr
+}
+
+// BuildIndex parses all Go files and builds the function index
+func (fr *FunctionResolver) BuildIndex() error {
+	return filepath.WalkDir(fr.rootPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+
+		// Skip vendor and testdata directories
+		if strings.Contains(path, "/vendor/") || strings.Contains(path, "/testdata/") {
+			return nil
+		}
+
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return nil // Skip files we can't read
+		}
+
+		f, err := parser.ParseFile(fr.fset, path, src, parser.ParseComments)
+		if err != nil {
+			return nil // Skip files we can't parse
+		}
+
+		fr.files[path] = f
+
+		// Determine package import path for this file
+		// For files within rootPath, construct the import path relative to rootPath
+		relPath, err := filepath.Rel(fr.rootPath, path)
+		var packagePath string
+		var fullPackagePath string
+		if err == nil {
+			// Convert file path to package import path
+			// e.g., tests/cnf/ran/ptp/internal/ptpdaemon/exec.go -> tests/cnf/ran/ptp/internal/ptpdaemon
+			dir := filepath.Dir(relPath)
+			// Normalize separators
+			packagePath = filepath.ToSlash(dir)
+			fr.packagePaths[path] = packagePath
+
+			// Construct full import path if we have module name
+			if fr.moduleName != "" {
+				fullPackagePath = fr.moduleName + "/" + packagePath
+			}
+		}
+
+		// Extract imports
+		importMap := make(map[string]string)
+		for _, imp := range f.Imports {
+			importPath := strings.Trim(imp.Path.Value, "\"")
+			if imp.Name != nil {
+				importMap[imp.Name.Name] = importPath
+			} else {
+				// Extract package name from import path
+				parts := strings.Split(importPath, "/")
+				if len(parts) > 0 {
+					importMap[parts[len(parts)-1]] = importPath
+				}
+			}
+		}
+		fr.imports[path] = importMap
+
+		// Extract function definitions
+		for _, decl := range f.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				if fn.Name != nil {
+					// Check if it's a method (has receiver)
+					if fn.Recv != nil && len(fn.Recv.List) > 0 {
+						recv := fn.Recv.List[0]
+						var recvType string
+						switch rt := recv.Type.(type) {
+						case *ast.Ident:
+							recvType = rt.Name
+						case *ast.StarExpr:
+							if ident, ok := rt.X.(*ast.Ident); ok {
+								recvType = ident.Name
+							}
+						}
+						if recvType != "" {
+							if fr.methods[recvType] == nil {
+								fr.methods[recvType] = make(map[string]*ast.FuncDecl)
+							}
+							fr.methods[recvType][fn.Name.Name] = fn
+						}
+					} else {
+						// Regular function - index by package import path for cross-package resolution
+						// Store by both relative path and full import path for better matching
+						if packagePath != "" {
+							// Store by relative path
+							if fr.packageFuncs[packagePath] == nil {
+								fr.packageFuncs[packagePath] = make(map[string]*ast.FuncDecl)
+							}
+							fr.packageFuncs[packagePath][fn.Name.Name] = fn
+
+							// Also store by full import path if we have module name
+							if fullPackagePath != "" {
+								if fr.packageFuncs[fullPackagePath] == nil {
+									fr.packageFuncs[fullPackagePath] = make(map[string]*ast.FuncDecl)
+								}
+								fr.packageFuncs[fullPackagePath][fn.Name.Name] = fn
+							}
+						} else {
+							// Fallback: use package name
+							pkgKey := f.Name.Name
+							if fr.packageFuncs[pkgKey] == nil {
+								fr.packageFuncs[pkgKey] = make(map[string]*ast.FuncDecl)
+							}
+							fr.packageFuncs[pkgKey][fn.Name.Name] = fn
+						}
+
+						// Also keep in functions map for same-package calls
+						fr.functions[fn.Name.Name] = fn
+					}
+				}
+			}
+		}
+
+		return nil
+	})
+}
+
+// ResolveFunction finds the function definition for a call
+func (fr *FunctionResolver) ResolveFunction(call *ast.CallExpr, file *ast.File, filePath string) (*ast.FuncDecl, error) {
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		// Direct function call: funcName()
+		if fn, ok := fr.functions[fun.Name]; ok {
+			return fn, nil
+		}
+	case *ast.SelectorExpr:
+		// Could be: package.Function() or obj.Method()
+		methodName := fun.Sel.Name
+
+		if ident, ok := fun.X.(*ast.Ident); ok {
+			// First, check if it's a package-qualified call (e.g., ptpdaemon.GetPtpDaemonPodOnNode())
+			// Extract imports directly from the file AST
+			var importMap map[string]string
+			// Try to get imports from filePath first (for indexed files)
+			if importMapFromIndex, ok := fr.imports[filePath]; ok {
+				importMap = importMapFromIndex
+			} else if file != nil {
+				// Fallback: extract imports directly from the file AST
+				importMap = make(map[string]string)
+				for _, imp := range file.Imports {
+					importPath := strings.Trim(imp.Path.Value, "\"")
+					if imp.Name != nil {
+						importMap[imp.Name.Name] = importPath
+					} else {
+						// Extract package name from import path
+						parts := strings.Split(importPath, "/")
+						if len(parts) > 0 {
+							importMap[parts[len(parts)-1]] = importPath
+						}
+					}
+				}
+			}
+
+			if importMap != nil {
+				if packagePath, ok := importMap[ident.Name]; ok {
+					// Found import - this is a package-qualified call
+					// Try exact match first (both full import path and relative path)
+					if pkgFuncs, ok := fr.packageFuncs[packagePath]; ok {
+						if fn, ok := pkgFuncs[methodName]; ok {
+							return fn, nil
+						}
+					}
+
+					// Extract relative path from full import path if it contains module name
+					// e.g., "github.com/rh-ecosystem-edge/eco-gotests/tests/cnf/..." -> "tests/cnf/..."
+					if fr.moduleName != "" {
+						// Try with leading slash: moduleName + "/" + relativePath
+						if strings.HasPrefix(packagePath, fr.moduleName+"/") {
+							relativePath := strings.TrimPrefix(packagePath, fr.moduleName+"/")
+							if pkgFuncs, ok := fr.packageFuncs[relativePath]; ok {
+								if fn, ok := pkgFuncs[methodName]; ok {
+									return fn, nil
+								}
+							}
+						}
+						// Also try if packagePath starts with moduleName (handles cases without leading slash)
+						if strings.HasPrefix(packagePath, fr.moduleName) {
+							relativePath := strings.TrimPrefix(packagePath, fr.moduleName)
+							relativePath = strings.TrimPrefix(relativePath, "/") // Remove leading slash if present
+							if relativePath != "" && relativePath != packagePath {
+								if pkgFuncs, ok := fr.packageFuncs[relativePath]; ok {
+									if fn, ok := pkgFuncs[methodName]; ok {
+										return fn, nil
+									}
+								}
+							}
+						}
+					}
+
+					// Try matching by package path suffix (handles relative imports)
+					// e.g., "tests/cnf/ran/ptp/internal/ptpdaemon" matches "github.com/.../ptpdaemon"
+					for pkgPath, pkgFuncs := range fr.packageFuncs {
+						// Try exact match first
+						if packagePath == pkgPath {
+							if fn, ok := pkgFuncs[methodName]; ok {
+								return fn, nil
+							}
+						}
+						// Try suffix match: packagePath ends with pkgPath (with proper boundary)
+						// e.g., "github.com/.../tests/cnf/ran/ptp/internal/ptpdaemon" ends with "tests/cnf/ran/ptp/internal/ptpdaemon"
+						if strings.HasSuffix(packagePath, "/"+pkgPath) {
+							if fn, ok := pkgFuncs[methodName]; ok {
+								return fn, nil
+							}
+						}
+						// Also try if packagePath exactly equals pkgPath (already checked above, but be safe)
+						if packagePath == pkgPath {
+							if fn, ok := pkgFuncs[methodName]; ok {
+								return fn, nil
+							}
+						}
+						// Try reverse: pkgPath ends with packagePath (with proper boundary)
+						if strings.HasSuffix(pkgPath, "/"+packagePath) {
+							if fn, ok := pkgFuncs[methodName]; ok {
+								return fn, nil
+							}
+						}
+						// Also try matching by last component (package name)
+						parts := strings.Split(packagePath, "/")
+						if len(parts) > 0 {
+							lastPart := parts[len(parts)-1]
+							pkgParts := strings.Split(pkgPath, "/")
+							if len(pkgParts) > 0 && pkgParts[len(pkgParts)-1] == lastPart {
+								if fn, ok := pkgFuncs[methodName]; ok {
+									return fn, nil
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Try to resolve as method call: obj.Method()
+			// Try exact match first (e.g., pods.Create() -> Pods.Create())
+			recvType := strings.Title(ident.Name) // Capitalize first letter
+			if methods, ok := fr.methods[recvType]; ok {
+				if method, ok := methods[methodName]; ok {
+					return method, nil
+				}
+			}
+
+			// Try lowercase match (e.g., pods.Create() -> pods.Create())
+			if methods, ok := fr.methods[ident.Name]; ok {
+				if method, ok := methods[methodName]; ok {
+					return method, nil
+				}
+			}
+
+			// Try all method maps - find any method with matching name
+			// This handles cases where the receiver type doesn't match exactly
+			for recvType, methods := range fr.methods {
+				if method, ok := methods[methodName]; ok {
+					// Check if ident name matches receiver type (case-insensitive or partial match)
+					recvLower := strings.ToLower(recvType)
+					identLower := strings.ToLower(ident.Name)
+					if recvLower == identLower ||
+						strings.HasPrefix(recvLower, identLower) ||
+						strings.HasSuffix(recvLower, identLower) {
+						return method, nil
+					}
+				}
+			}
+		}
+
+		// Handle chained calls like obj.NewBuilder().Create()
+		if sel2, ok := fun.X.(*ast.SelectorExpr); ok {
+			if ident, ok := sel2.X.(*ast.Ident); ok {
+				// Try to find method on the type returned by NewBuilder()
+				// This is a simplified approach - in reality we'd need type inference
+				builderType := strings.Title(ident.Name) + "Builder"
+				if methods, ok := fr.methods[builderType]; ok {
+					if method, ok := methods[methodName]; ok {
+						return method, nil
+					}
+				}
+			}
+		}
+	}
+	return nil, fmt.Errorf("function not found")
+}
+
+// isK8sCall checks if a call expression is an actual k8s/ocp API call (not a helper method)
+// This should only return true for direct k8s API calls, not helper methods that wrap them
+func isK8sCall(call *ast.CallExpr) bool {
+	// Check for external commands (kubectl/oc) - these are actual k8s calls
+	if exts := detectExternals(call); len(exts) > 0 {
+		for _, ext := range exts {
+			if strings.Contains(ext, "kubectl") || strings.Contains(ext, "oc") {
+				return true
+			}
+		}
+	}
+
+	// Check for direct k8s client API calls (e.g., client.Get(), clientInterface.Create())
+	// These patterns indicate actual k8s API calls, not helper methods
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		// Check if it's a method call on a client-like object
+		if selX, ok := sel.X.(*ast.SelectorExpr); ok {
+			// Pattern: client.CoreV1().Pods().Get() or similar
+			if ident, ok := selX.X.(*ast.Ident); ok {
+				clientNames := []string{"client", "clientset", "c", "k8sClient", "kubeClient"}
+				for _, name := range clientNames {
+					if ident.Name == name {
+						// This looks like a direct k8s API call
+						if verbSet[sel.Sel.Name] {
+							return true
+						}
+					}
+				}
+			}
+		}
+		// Check for direct method calls on client interfaces
+		if ident, ok := sel.X.(*ast.Ident); ok {
+			// Pattern: clientInterface.Get() or similar
+			clientInterfaceNames := []string{"clientInterface", "interface", "iface"}
+			for _, name := range clientInterfaceNames {
+				if ident.Name == name && verbSet[sel.Sel.Name] {
+					return true
+				}
+			}
+		}
+	}
+
+	// Don't treat eco-goinfra patterns or helper functions as k8s calls
+	// These are helper methods that should be expanded further
+	// Only stop expansion when we reach actual k8s API calls
+
+	return false
+}
+
+// expandCodeUpToK8sCalls recursively expands function calls until reaching k8s/ocp calls
+func expandCodeUpToK8sCalls(
+	node ast.Node,
+	fset *token.FileSet,
+	resolver *FunctionResolver,
+	file *ast.File,
+	filePath string,
+	visited map[string]bool,
+	depth int,
+	maxDepth int,
+) (string, error) {
+	if depth > maxDepth {
+		return "", nil // Stop at max depth
+	}
+
+	var result strings.Builder
+	var lastPos token.Pos
+	skipRanges := make(map[token.Pos]token.Pos) // Track ranges to skip (start -> end)
+
+	// Get source file content
+	srcFile := fset.File(node.Pos())
+	if srcFile == nil {
+		return "", fmt.Errorf("could not get source file")
+	}
+	src, err := os.ReadFile(srcFile.Name())
+	if err != nil {
+		return "", err
+	}
+
+	// Constrain source to node boundaries to avoid writing entire file
+	nodeStart := srcFile.Offset(node.Pos())
+	nodeEnd := srcFile.Offset(node.End())
+	if nodeStart < 0 || nodeEnd > len(src) || nodeStart >= nodeEnd {
+		return "", fmt.Errorf("invalid node boundaries")
+	}
+	// Use only the node's portion of the source
+	nodeSrc := src[nodeStart:nodeEnd]
+
+	// Collect all function calls first to determine what to expand
+	type callInfo struct {
+		call     *ast.CallExpr
+		pos      token.Pos
+		end      token.Pos
+		expand   bool
+		expanded string
+	}
+	var calls []callInfo
+
+	ast.Inspect(node, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			expand := false
+			var expanded string
+
+			// Check if it's an actual k8s API call - don't expand these
+			// Helper methods (like pods.Create()) will be expanded until we reach actual k8s calls
+			if !isK8sCall(call) {
+				// Try to resolve and expand the function/method
+				fn, err := resolver.ResolveFunction(call, file, filePath)
+				if err == nil && fn != nil && fn.Body != nil {
+					funcKey := fmt.Sprintf("%s:%d", filePath, fn.Pos())
+					if !visited[funcKey] {
+						visited[funcKey] = true
+						// Use the file where the function is defined for recursive expansion
+						// This ensures imports are resolved correctly in the function's context
+						fnFile := resolver.files[resolver.fset.File(fn.Pos()).Name()]
+						if fnFile == nil {
+							// Fallback to current file if function's file not found
+							fnFile = file
+						}
+						fnFilePath := resolver.fset.File(fn.Pos()).Name()
+						funcName := "unknown"
+						if fn.Name != nil {
+							funcName = fn.Name.Name
+						}
+						// Use resolver's file set for the function's file, not the test file's file set
+						expandedBody, err := expandCodeUpToK8sCalls(
+							fn.Body,
+							resolver.fset, // Use resolver's file set, not the test file's
+							resolver,
+							fnFile,
+							fnFilePath,
+							visited,
+							depth+1,
+							maxDepth,
+						)
+						delete(visited, funcKey)
+						if err == nil && expandedBody != "" {
+							expand = true
+							// Include function name in comment for clarity
+							expanded = fmt.Sprintf("// Expanded: %s\n%s", funcName, expandedBody)
+						}
+					}
+				}
+			}
+			// If it's an actual k8s API call, we don't expand it (keep original call)
+
+			calls = append(calls, callInfo{
+				call:     call,
+				pos:      call.Pos(),
+				end:      call.End(),
+				expand:   expand,
+				expanded: expanded,
+			})
+			return false // Don't recurse into call expressions
+		}
+		return true
+	})
+
+	// Sort calls by position
+	for i := 0; i < len(calls)-1; i++ {
+		for j := i + 1; j < len(calls); j++ {
+			if calls[i].pos > calls[j].pos {
+				calls[i], calls[j] = calls[j], calls[i]
+			}
+		}
+	}
+
+	// Mark ranges to skip for expanded calls
+	for _, ci := range calls {
+		if ci.expand {
+			skipRanges[ci.pos] = ci.end
+		}
+	}
+
+	// Now write code, skipping expanded ranges
+	// Process statements one by one to avoid breaking up statements
+	var processStmt func(ast.Stmt) = func(stmt ast.Stmt) {
+		if stmt == nil {
+			return
+		}
+
+		// Check if this statement overlaps with a skipped range
+		for skipStart, skipEnd := range skipRanges {
+			if stmt.Pos() >= skipStart && stmt.Pos() < skipEnd {
+				return // Skip this entire statement
+			}
+		}
+
+		// Write code before this statement
+		if lastPos < stmt.Pos() && lastPos > 0 {
+			start := srcFile.Offset(lastPos)
+			end := srcFile.Offset(stmt.Pos())
+			// Check if this range overlaps with any skipped range
+			shouldWrite := true
+			for skipStart, skipEnd := range skipRanges {
+				if start < srcFile.Offset(skipEnd) && end > srcFile.Offset(skipStart) {
+					// Overlaps - adjust range
+					if start < srcFile.Offset(skipStart) {
+						end = srcFile.Offset(skipStart)
+					} else {
+						shouldWrite = false
+						break
+					}
+				}
+			}
+			// Adjust offsets to be relative to node start
+			relStart := start - nodeStart
+			relEnd := end - nodeStart
+			if shouldWrite && relStart >= 0 && relEnd <= len(nodeSrc) && relStart < relEnd {
+				result.Write(nodeSrc[relStart:relEnd])
+			}
+		}
+
+		// Check if this statement contains any calls we need to expand
+		ast.Inspect(stmt, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				// Check if we should expand this call
+				if _, shouldSkip := skipRanges[call.Pos()]; shouldSkip {
+					// Write expanded code instead of the call
+					for _, ci := range calls {
+						if ci.pos == call.Pos() {
+							// Write code before the call
+							callStart := srcFile.Offset(call.Pos()) - nodeStart
+							stmtStart := srcFile.Offset(stmt.Pos()) - nodeStart
+							lastPosOffset := srcFile.Offset(lastPos) - nodeStart
+							if lastPos < call.Pos() && lastPosOffset >= stmtStart {
+								beforeCall := lastPosOffset
+								if beforeCall >= 0 && beforeCall < callStart && beforeCall < len(nodeSrc) && callStart <= len(nodeSrc) {
+									result.Write(nodeSrc[beforeCall:callStart])
+								}
+							}
+							result.WriteString(ci.expanded)
+							lastPos = call.End()
+							return false // Don't recurse into the call
+						}
+					}
+					return false
+				}
+			}
+			return true
+		})
+
+		// Write the statement (or what's left of it after expansions)
+		stmtEnd := stmt.End()
+		if lastPos < stmtEnd {
+			start := srcFile.Offset(lastPos) - nodeStart
+			end := srcFile.Offset(stmtEnd) - nodeStart
+			// Check for overlaps with skipped ranges
+			for skipStart, skipEnd := range skipRanges {
+				skipStartOffset := srcFile.Offset(skipStart) - nodeStart
+				skipEndOffset := srcFile.Offset(skipEnd) - nodeStart
+				if start < skipEndOffset && end > skipStartOffset {
+					if start < skipStartOffset {
+						end = skipStartOffset
+					} else {
+						lastPos = stmtEnd
+						return
+					}
+				}
+			}
+			if start >= 0 && end <= len(nodeSrc) && start < end {
+				result.Write(nodeSrc[start:end])
+			}
+			lastPos = stmtEnd
+		}
+	}
+
+	// Process all statements in the node
+	if block, ok := node.(*ast.BlockStmt); ok {
+		for _, stmt := range block.List {
+			processStmt(stmt)
+		}
+	} else {
+		// For non-block nodes, use Inspect but only write at statement boundaries
+		ast.Inspect(node, func(n ast.Node) bool {
+			if n == nil {
+				return false
+			}
+
+			// Check if this node is within a skipped range
+			for skipStart, skipEnd := range skipRanges {
+				if n.Pos() >= skipStart && n.Pos() < skipEnd {
+					return false
+				}
+			}
+
+			// Only write at statement boundaries
+			if _, isStmt := n.(ast.Stmt); isStmt {
+				if lastPos < n.Pos() && lastPos > 0 {
+					start := srcFile.Offset(lastPos) - nodeStart
+					end := srcFile.Offset(n.Pos()) - nodeStart
+					if start >= 0 && end <= len(nodeSrc) && start < end {
+						result.Write(nodeSrc[start:end])
+					}
+				}
+
+				// Check if this statement contains expanded calls
+				if call, ok := n.(*ast.CallExpr); ok {
+					if _, shouldSkip := skipRanges[call.Pos()]; shouldSkip {
+						for _, ci := range calls {
+							if ci.pos == call.Pos() {
+								result.WriteString(ci.expanded)
+								lastPos = call.End()
+								return false
+							}
+						}
+					}
+				}
+
+				// Write the statement
+				start := srcFile.Offset(n.Pos()) - nodeStart
+				end := srcFile.Offset(n.End()) - nodeStart
+				if start >= 0 && end <= len(nodeSrc) && start < end {
+					result.Write(nodeSrc[start:end])
+				}
+				lastPos = n.End()
+				return false
+			}
+
+			// For function calls, handle expansion
+			if call, ok := n.(*ast.CallExpr); ok {
+				if _, shouldSkip := skipRanges[call.Pos()]; shouldSkip {
+					for _, ci := range calls {
+						if ci.pos == call.Pos() {
+							result.WriteString(ci.expanded)
+							lastPos = call.End()
+							return false
+						}
+					}
+				} else if !isK8sCall(call) {
+					// Write original call
+					start := srcFile.Offset(call.Pos()) - nodeStart
+					end := srcFile.Offset(call.End()) - nodeStart
+					if start >= 0 && end <= len(nodeSrc) && start < end {
+						result.Write(nodeSrc[start:end])
+					}
+					lastPos = call.End()
+					return false
+				}
+			}
+
+			return true
+		})
+	}
+
+	// Write remaining code
+	if lastPos > 0 && lastPos < node.End() {
+		start := srcFile.Offset(lastPos) - nodeStart
+		end := srcFile.Offset(node.End()) - nodeStart
+		// Check for overlaps with skipped ranges
+		for skipStart, skipEnd := range skipRanges {
+			skipStartOffset := srcFile.Offset(skipStart) - nodeStart
+			skipEndOffset := srcFile.Offset(skipEnd) - nodeStart
+			if start < skipEndOffset && end > skipStartOffset {
+				if start < skipStartOffset {
+					end = skipStartOffset
+				} else {
+					return result.String(), nil
+				}
+			}
+		}
+		if start >= 0 && end <= len(nodeSrc) && start < end {
+			result.Write(nodeSrc[start:end])
+		}
+	} else if lastPos == 0 {
+		// No calls found, write entire node
+		if len(nodeSrc) > 0 {
+			result.Write(nodeSrc)
+		}
+	}
+
+	return result.String(), nil
+}
+
+// formatCode formats Go code using go/format
+func formatCode(code string) (string, error) {
+	formatted, err := format.Source([]byte(code))
+	if err != nil {
+		return code, err // Return original if formatting fails
+	}
+	return string(formatted), nil
+}
+
+// exportExpandedCode writes expanded code to individual files
+func exportExpandedCode(spec KubeSpec, outputDir string, filePath string, rootPath string) error {
+	if outputDir == "" {
+		return nil // Skip if no output directory specified
+	}
+
+	// Check if there's any expanded code to export
+	hasExpandedCode := false
+	for _, byStep := range spec.BySteps {
+		if byStep.ExpandedCode != "" {
+			hasExpandedCode = true
+			break
+		}
+	}
+	if !hasExpandedCode {
+		return nil // Skip if no expanded code to export
+	}
+
+	// Calculate relative path from repository root (baseline only)
+	relPath, err := filepath.Rel(rootPath, filePath)
+	if err != nil {
+		// If relative path calculation fails, use basename of root as fallback
+		repoName := filepath.Base(rootPath)
+		relPath = strings.TrimPrefix(filePath, rootPath)
+		relPath = strings.TrimPrefix(relPath, "/")
+		relPath = filepath.Join(repoName, relPath)
+	} else {
+		// Prepend repository basename to maintain structure
+		repoName := filepath.Base(rootPath)
+		relPath = filepath.Join(repoName, relPath)
+	}
+
+	relDir := filepath.Dir(relPath)
+	outDir := filepath.Join(outputDir, relDir)
+
+	// Create directory when we have content to write
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return err
+	}
+
+	baseName := strings.TrimSuffix(filepath.Base(filePath), ".go")
+	testID := strings.ReplaceAll(spec.TestID, "/", "_")
+	testID = strings.ReplaceAll(testID, ":", "_")
+
+	// Export entire It block expanded code if available
+	if spec.ExpandedCode != "" {
+		filename := fmt.Sprintf("%s_%s_expanded.go", baseName, testID)
+		filePathOut := filepath.Join(outDir, filename)
+		content := fmt.Sprintf(`// Expanded Test Code
+// Original Test: %s
+// Full It Block Code with Functions Expanded
+
+package test
+
+%s
+`, spec.TestID, spec.ExpandedCode)
+
+		if err := os.WriteFile(filePathOut, []byte(content), 0644); err != nil {
+			return err
+		}
+	}
+
+	// Export By steps
+	for i, byStep := range spec.BySteps {
+		if byStep.ExpandedCode == "" {
+			continue
+		}
+
+		filename := fmt.Sprintf("%s_%s_by_%d.go", baseName, testID, i)
+		filePathOut := filepath.Join(outDir, filename)
+		content := fmt.Sprintf(`// Expanded Test Code
+// Original Test: %s
+// By Step: %s
+// Line: %d
+// Functions Expanded: See expanded code below
+
+package test
+
+%s
+`, spec.TestID, byStep.Description, byStep.Line, byStep.ExpandedCode)
+
+		if err := os.WriteFile(filePathOut, []byte(content), 0644); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func main() {
 	root := flag.String("root", ".", "root of the Go repo to scan")
+	expandFunctions := flag.Bool("expand-functions", true, "expand function calls up to k8s/ocp calls")
+	exportExpanded := flag.Bool("export-expanded", false, "export expanded code to individual files")
+	expandedOutputDir := flag.String("expanded-output-dir", "", "output directory for expanded code files (default: {output-dir}/expanded_code/)")
 	flag.Parse()
 
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
+
+	// Initialize function resolver if expansion is enabled
+	var resolver *FunctionResolver
+	if *expandFunctions {
+		resolver = NewFunctionResolver(*root)
+		if err := resolver.BuildIndex(); err != nil {
+			// Continue even if index building fails
+			resolver = nil
+		}
+	}
 
 	_ = filepath.WalkDir(*root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || (!strings.HasSuffix(path, "_test.go") && !strings.HasSuffix(path, ".go")) {
@@ -2474,7 +3395,7 @@ func main() {
 		// If file has Ginkgo patterns, check for individual It blocks first
 		if hasGinkgoPatterns {
 			// Try to extract individual It blocks
-			itSpecs := extractItBlocks(f, fset, path, *root)
+			itSpecs := extractItBlocks(f, fset, path, *root, resolver)
 			if len(itSpecs) > 0 {
 				// We found individual It blocks, output them instead of consolidated spec
 				for i := range itSpecs {
@@ -2482,6 +3403,16 @@ func main() {
 					comments := []string{} // TODO: Extract comments from AST
 					itSpecs[i].Purpose = detectPurpose(itSpecs[i].TestID, comments, itSpecs[i].Actions, itSpecs[i].Expectations)
 					itSpecs[i].Tech = detectNetworkingTech(itSpecs[i].TestID, path, comments)
+
+					// Export expanded code if requested
+					if *exportExpanded {
+						expandedDir := *expandedOutputDir
+						if expandedDir == "" {
+							expandedDir = filepath.Join(filepath.Dir(path), "expanded_code")
+						}
+						exportExpandedCode(itSpecs[i], expandedDir, path, *root)
+					}
+
 					b, _ := json.Marshal(itSpecs[i])
 					fmt.Fprintln(out, string(b))
 				}
@@ -2663,7 +3594,7 @@ func main() {
 			}
 
 			// Analyze By steps for more granular operation tracking
-			bySteps := analyzeBySteps(f, fset)
+			bySteps := analyzeBySteps(f, fset, resolver, path)
 			spec.BySteps = bySteps
 
 			// Only output if we found meaningful patterns
@@ -2701,6 +3632,15 @@ func main() {
 				// Ensure prereq is always initialized (even if empty)
 				if spec.Prereq == nil {
 					spec.Prereq = []string{}
+				}
+
+				// Export expanded code if requested
+				if *exportExpanded {
+					expandedDir := *expandedOutputDir
+					if expandedDir == "" {
+						expandedDir = filepath.Join(filepath.Dir(path), "expanded_code")
+					}
+					exportExpandedCode(spec, expandedDir, path, *root)
 				}
 
 				b, _ := json.Marshal(spec)
@@ -3006,6 +3946,15 @@ func main() {
 			// Ensure prereq is always initialized (even if empty)
 			if spec.Prereq == nil {
 				spec.Prereq = []string{}
+			}
+
+			// Export expanded code if requested
+			if *exportExpanded {
+				expandedDir := *expandedOutputDir
+				if expandedDir == "" {
+					expandedDir = filepath.Join(filepath.Dir(path), "expanded_code")
+				}
+				exportExpandedCode(spec, expandedDir, path, *root)
 			}
 
 			b, _ := json.Marshal(spec)

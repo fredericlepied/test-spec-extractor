@@ -1133,6 +1133,15 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
         if steps:
             parts.append("steps:")
             parts.extend([f"- {s}" for s in steps])
+
+        # Expanded code for per-It schema (if available)
+        expanded_code = spec.get("expanded_code", "")
+        if expanded_code:
+            # Truncate very long expanded code to avoid token limits
+            truncated = expanded_code[:2000] if len(expanded_code) > 2000 else expanded_code
+            parts.append("EXPANDED_CODE:")
+            parts.append(truncated)
+
         # Note: file_path is NOT included in text for FAISS - it's metadata only
         return "\n".join(parts)
 
@@ -1283,6 +1292,23 @@ def spec_to_text(spec: Dict[str, Any]) -> str:
                 step_type = step.get("type", "")
                 if step_type:
                     parts.append(f"    - type:{step_type}")
+
+                # Expanded code for this step (if available)
+                step_expanded = step.get("expanded_code", "")
+                if step_expanded:
+                    # Truncate very long expanded code to avoid token limits
+                    # Keep first 2000 characters which should capture the key execution path
+                    truncated = step_expanded[:2000] if len(step_expanded) > 2000 else step_expanded
+                    parts.append(f"    EXPANDED_CODE: {truncated}")
+
+    # Expanded code section (entire test function expansion)
+    expanded_code = spec.get("expanded_code", "")
+    if expanded_code:
+        # Truncate very long expanded code to avoid token limits
+        # Keep first 2000 characters which should capture the key execution path
+        truncated = expanded_code[:2000] if len(expanded_code) > 2000 else expanded_code
+        parts.append("EXPANDED_CODE:")
+        parts.append(truncated)
 
     # Prerequisites section (resources created in setup phase)
     prereq = spec.get("prereq", [])

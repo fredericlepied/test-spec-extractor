@@ -18,6 +18,9 @@ PY_ROOTS=()
 OUTPUT_DIR="results"
 CLEANUP=true
 VERBOSE=false
+EXPAND_FUNCTIONS=true
+EXPORT_EXPANDED=true
+EXPANDED_OUTPUT_DIR=""
 
 # Function to print colored output
 print_status() {
@@ -49,6 +52,9 @@ OPTIONS:
     -o, --output-dir DIR    Output directory for results (default: results)
     -c, --no-cleanup        Don't clean up intermediate files
     -v, --verbose           Verbose output
+    -e, --expand-functions  Expand function calls up to k8s/ocp calls (default: true)
+    -x, --export-expanded   Export expanded code to individual files
+    --expanded-output-dir DIR  Output directory for expanded code files (default: {output-dir}/expanded_code/)
     -h, --help              Show this help message
 
 EXAMPLES:
@@ -92,6 +98,18 @@ while [[ $# -gt 0 ]]; do
         -v|--verbose)
             VERBOSE=true
             shift
+            ;;
+        -e|--expand-functions)
+            EXPAND_FUNCTIONS=true
+            shift
+            ;;
+        -x|--export-expanded)
+            EXPORT_EXPANDED=true
+            shift
+            ;;
+        --expanded-output-dir)
+            EXPANDED_OUTPUT_DIR="$2"
+            shift 2
             ;;
         -h|--help)
             show_usage
@@ -178,7 +196,21 @@ for i in "${!GO_ROOTS[@]}"; do
     repo_name=$(basename "$go_root")
     print_status "  Extracting from $repo_name..."
     
-    if ! ./go-extractor/kubespec-go -root "$go_root" > "$OUTPUT_DIR/go_specs_${i}_${repo_name}.jsonl"; then
+    # Build command with expansion flags
+    EXPAND_FLAGS=""
+    if [[ "$EXPAND_FUNCTIONS" == "true" ]]; then
+        EXPAND_FLAGS="-expand-functions"
+    fi
+    if [[ "$EXPORT_EXPANDED" == "true" ]]; then
+        EXPAND_FLAGS="$EXPAND_FLAGS -export-expanded"
+        if [[ -n "$EXPANDED_OUTPUT_DIR" ]]; then
+            EXPAND_FLAGS="$EXPAND_FLAGS -expanded-output-dir $EXPANDED_OUTPUT_DIR"
+        else
+            EXPAND_FLAGS="$EXPAND_FLAGS -expanded-output-dir $OUTPUT_DIR/expanded_code"
+        fi
+    fi
+    
+    if ! ./go-extractor/kubespec-go -root "$go_root" $EXPAND_FLAGS > "$OUTPUT_DIR/go_specs_${i}_${repo_name}.jsonl"; then
         print_error "Failed to extract Go specs from $go_root"
         exit 1
     fi
@@ -201,7 +233,21 @@ for i in "${!PY_ROOTS[@]}"; do
     repo_name=$(basename "$py_root")
     print_status "  Extracting from $repo_name..."
     
-    if ! python py-extractor/extract_kubespec.py --root "$py_root" > "$OUTPUT_DIR/py_specs_${i}_${repo_name}.jsonl"; then
+    # Build command with expansion flags
+    PY_EXPAND_FLAGS=""
+    if [[ "$EXPAND_FUNCTIONS" == "true" ]]; then
+        PY_EXPAND_FLAGS="--expand-functions"
+    fi
+    if [[ "$EXPORT_EXPANDED" == "true" ]]; then
+        PY_EXPAND_FLAGS="$PY_EXPAND_FLAGS --export-expanded"
+        if [[ -n "$EXPANDED_OUTPUT_DIR" ]]; then
+            PY_EXPAND_FLAGS="$PY_EXPAND_FLAGS --expanded-output-dir $EXPANDED_OUTPUT_DIR"
+        else
+            PY_EXPAND_FLAGS="$PY_EXPAND_FLAGS --expanded-output-dir $OUTPUT_DIR/expanded_code"
+        fi
+    fi
+    
+    if ! python py-extractor/extract_kubespec.py --root "$py_root" $PY_EXPAND_FLAGS > "$OUTPUT_DIR/py_specs_${i}_${repo_name}.jsonl"; then
         print_error "Failed to extract Python specs from $py_root"
         exit 1
     fi

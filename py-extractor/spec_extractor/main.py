@@ -17,7 +17,9 @@ def split_csv(s: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def should_include_file(file_path: str, include_patterns: list[str], exclude_patterns: list[str]) -> bool:
+def should_include_file(
+    file_path: str, include_patterns: list[str], exclude_patterns: list[str]
+) -> bool:
     """Check if file should be included based on patterns."""
     # Simple pattern matching (for now, just check file extension and common exclusions)
     if not file_path.endswith(".py"):
@@ -54,6 +56,22 @@ def main():
         help="Comma-separated exclude globs",
     )
     parser.add_argument("--jsonl", default="", help="Optional path to write per-test JSONL records")
+    # Expansion flags (accepted but not yet implemented in markdown extractor)
+    parser.add_argument(
+        "--expand-functions",
+        action="store_true",
+        help="expand function calls up to k8s/ocp calls (not yet implemented in markdown extractor)",
+    )
+    parser.add_argument(
+        "--export-expanded",
+        action="store_true",
+        help="export expanded code to individual files (not yet implemented in markdown extractor)",
+    )
+    parser.add_argument(
+        "--expanded-output-dir",
+        default="",
+        help="output directory for expanded code files (not yet implemented in markdown extractor)",
+    )
     args = parser.parse_args()
 
     # Create output directory if missing
@@ -124,9 +142,10 @@ def main():
 
         parsed += 1
 
-    print(f"Parsed {parsed}/{len(files)} Python files under {args.root}. Output will be written to {args.out}")
+    print(
+        f"Parsed {parsed}/{len(files)} Python files under {args.root}. Output will be written to {args.out}"
+    )
 
 
 if __name__ == "__main__":
     main()
-

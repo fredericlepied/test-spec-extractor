@@ -35,6 +35,10 @@ func parseFlags() config {
 	flag.StringVar(&excludeCSV, "exclude", "vendor/**,**/*_testdata/**", "Comma-separated exclude globs")
 	flag.Var(&aliasCSV, "alias", "Repeatable alias mappings: Name=Alt1,Alt2 (can be specified multiple times)")
 	flag.StringVar(&jsonlOut, "jsonl", "", "Optional path to write per-test JSONL records")
+	// Expansion flags (accepted but not yet implemented in markdown extractor)
+	flag.Bool("expand-functions", false, "expand function calls up to k8s/ocp calls (not yet implemented in markdown extractor)")
+	flag.Bool("export-expanded", false, "export expanded code to individual files (not yet implemented in markdown extractor)")
+	flag.String("expanded-output-dir", "", "output directory for expanded code files (not yet implemented in markdown extractor)")
 	flag.Parse()
 
 	cfg := config{
