@@ -756,6 +756,25 @@ def calculate_context_penalty(spec_a: Dict[str, Any], spec_b: Dict[str, Any]) ->
 
     penalty = 0.0
 
+    # CRITICAL: Check spec context field first - this is the most important indicator
+    context_a = spec_a.get("context", [])
+    context_b = spec_b.get("context", [])
+
+    if context_a and context_b:
+        # Convert to sets for comparison
+        context_set_a = set(context_a)
+        context_set_b = set(context_b)
+
+        # If contexts are completely different, apply heavy penalty
+        if not context_set_a & context_set_b:  # No overlap
+            penalty += 0.4  # Heavy penalty for completely different contexts
+        elif context_set_a != context_set_b:  # Partial overlap
+            # Calculate how different they are
+            overlap_ratio = len(context_set_a & context_set_b) / max(
+                len(context_set_a), len(context_set_b)
+            )
+            penalty += 0.2 * (1.0 - overlap_ratio)  # Penalty proportional to difference
+
     # Context similarity based on file path structure
     path_parts_a = file_path_a.split("/")
     path_parts_b = file_path_b.split("/")
