@@ -44,6 +44,7 @@ func NewRecognizer(imports map[string]string, cliAliases map[string][]string) *R
 	add("Entry", "Entry") // Table test entries
 	add("Fail", "Fail")
 	add("Skip", "Skip")
+	add("Expect", "Expect")
 
 	// qualified ginkgo.* if imported under an alias
 	for local, full := range imports {
@@ -71,6 +72,10 @@ func NewRecognizer(imports map[string]string, cliAliases map[string][]string) *R
 			} {
 				add(canon, local+"."+base)
 			}
+		}
+		// Handle Gomega imports for Expect
+		if full == "github.com/onsi/gomega" {
+			add("Expect", local+".Expect")
 		}
 	}
 
@@ -167,3 +172,4 @@ func (r *Recognizer) IsEntry(call *ast.CallExpr) bool        { return r.is("Entr
 func (r *Recognizer) IsDeferCleanup(call *ast.CallExpr) bool { return r.is("DeferCleanup", call) }
 func (r *Recognizer) IsFail(call *ast.CallExpr) bool         { return r.is("Fail", call) }
 func (r *Recognizer) IsSkip(call *ast.CallExpr) bool         { return r.is("Skip", call) }
+func (r *Recognizer) IsExpect(call *ast.CallExpr) bool       { return r.is("Expect", call) }

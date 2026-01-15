@@ -269,12 +269,12 @@ for i in "${!GO_ROOTS[@]}"; do
     print_status "  Processing $repo_name..."
     
     if [[ "$VERBOSE" == "true" ]]; then
-        if ! ./spec-extractor/spec-extractor --root "$go_root" --out "$outdir" --jsonl "$GO_PER_IT_JSONL"; then
+        if ! ./spec-extractor/spec-extractor --root "$go_root" --out "$outdir" --jsonl "$GO_PER_IT_JSONL" --alias "BeforeAll=execute.BeforeAll"; then
             print_warning "  Failed to render markdown for $repo_name"
             continue
         fi
     else
-        if ! ./spec-extractor/spec-extractor --root "$go_root" --out "$outdir" --jsonl "$GO_PER_IT_JSONL" >/dev/null 2>&1; then
+        if ! ./spec-extractor/spec-extractor --root "$go_root" --out "$outdir" --jsonl "$GO_PER_IT_JSONL" --alias "BeforeAll=execute.BeforeAll" >/dev/null 2>&1; then
             print_warning "  Failed to render markdown for $repo_name"
             continue
         fi

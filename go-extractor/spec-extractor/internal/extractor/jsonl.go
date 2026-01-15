@@ -11,6 +11,7 @@ type PerItRecord struct {
 	Labels       []string `json:"labels,omitempty"`
 	PrepSteps    []string `json:"prep_steps,omitempty"`
 	Steps        []string `json:"steps,omitempty"`
+	Validations  []string `json:"validations,omitempty"`
 	CleanupSteps []string `json:"cleanup_steps,omitempty"`
 	FilePath     string   `json:"file_path,omitempty"`
 }
@@ -35,37 +36,74 @@ func WritePerItJSONL(spec *FileSpec, filePath string) error {
 		if c == nil {
 			return
 		}
-		for _, tc := range c.Cases {
-			rec := PerItRecord{Desc: tc.Description, FilePath: spec.FilePath}
-			if len(tc.Labels) > 0 {
-				rec.Labels = append(rec.Labels, tc.Labels...)
+
+		// Emit test records from container-level Skip conditions (from Before* blocks)
+		for _, skip := range c.SkipConditions {
+			transformedDesc := transformSkipMessage(skip.Text)
+			skipRec := PerItRecord{
+				Desc:     transformedDesc,
+				FilePath: spec.FilePath,
+				// No labels, prep_steps, steps, or cleanup_steps
 			}
-			// prepend inherited preparation steps from this container
-			if len(c.PrepSteps) > 0 {
-				for _, s := range c.PrepSteps {
-					rec.PrepSteps = append(rec.PrepSteps, s.Text)
-				}
-			}
-			// append test case specific preparation steps (including Skip conditions)
-			for _, st := range tc.PrepSteps {
-				rec.PrepSteps = append(rec.PrepSteps, st.Text)
-			}
-			// append inherited cleanup steps from this container
-			if len(c.CleanupSteps) > 0 {
-				for _, s := range c.CleanupSteps {
-					rec.CleanupSteps = append(rec.CleanupSteps, s.Text)
-				}
-			}
-			for _, st := range tc.Steps {
-				rec.Steps = append(rec.Steps, st.Text)
-			}
-			// append test case specific cleanup steps
-			for _, st := range tc.CleanupSteps {
-				rec.CleanupSteps = append(rec.CleanupSteps, st.Text)
-			}
-			if b, err := json.Marshal(rec); err == nil {
+			if b, err := json.Marshal(skipRec); err == nil {
 				w.Write(b)
 				w.WriteByte('\n')
+			}
+		}
+
+		for _, tc := range c.Cases {
+			// Emit original test case if it has a description
+			if tc.Description != "" {
+				rec := PerItRecord{Desc: tc.Description, FilePath: spec.FilePath}
+				if len(tc.Labels) > 0 {
+					rec.Labels = append(rec.Labels, tc.Labels...)
+				}
+				// prepend inherited preparation steps from this container
+				if len(c.PrepSteps) > 0 {
+					for _, s := range c.PrepSteps {
+						rec.PrepSteps = append(rec.PrepSteps, s.Text)
+					}
+				}
+				// append test case specific preparation steps (excluding Skip conditions)
+				for _, st := range tc.PrepSteps {
+					rec.PrepSteps = append(rec.PrepSteps, st.Text)
+				}
+				// append inherited cleanup steps from this container
+				if len(c.CleanupSteps) > 0 {
+					for _, s := range c.CleanupSteps {
+						rec.CleanupSteps = append(rec.CleanupSteps, s.Text)
+					}
+				}
+				for _, st := range tc.Steps {
+					rec.Steps = append(rec.Steps, st.Text)
+				}
+				// append validations with transformation applied
+				for _, v := range tc.Validations {
+					transformed := transformSkipMessage(v.Text)
+					rec.Validations = append(rec.Validations, transformed)
+				}
+				// append test case specific cleanup steps
+				for _, st := range tc.CleanupSteps {
+					rec.CleanupSteps = append(rec.CleanupSteps, st.Text)
+				}
+				if b, err := json.Marshal(rec); err == nil {
+					w.Write(b)
+					w.WriteByte('\n')
+				}
+			}
+
+			// Emit additional test records from Skip conditions
+			for _, skip := range tc.SkipConditions {
+				transformedDesc := transformSkipMessage(skip.Text)
+				skipRec := PerItRecord{
+					Desc:     transformedDesc,
+					FilePath: spec.FilePath,
+					// No labels, prep_steps, steps, or cleanup_steps
+				}
+				if b, err := json.Marshal(skipRec); err == nil {
+					w.Write(b)
+					w.WriteByte('\n')
+				}
 			}
 		}
 		for _, child := range c.Children {

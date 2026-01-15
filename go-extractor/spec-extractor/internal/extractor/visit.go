@@ -3,7 +3,6 @@ package extractor
 import (
 	"go/ast"
 	"go/token"
-	"strconv"
 )
 
 // BuildFileSpec walks the AST and builds a high-level spec tree.
@@ -45,10 +44,40 @@ func (v *visitor) visit(n ast.Node) bool {
 
 	if _, isBefore := v.recog.IsBefore(call); isBefore {
 		if fn := firstFuncLit(call); fn != nil {
+			// Track variable assignments to resolve Skip(variableName) calls
+			varAssignments := make(map[string]string)
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				if be, ok := n.(*ast.CallExpr); ok && v.recog.IsBy(be) {
-					if s := firstStringArg(be); s != "" {
-						v.current().PrepSteps = append(v.current().PrepSteps, TestStep{Text: s})
+				// Track simple string variable assignments
+				if assign, ok := n.(*ast.AssignStmt); ok {
+					for i, lhs := range assign.Lhs {
+						if ident, ok := lhs.(*ast.Ident); ok && i < len(assign.Rhs) {
+							if bl, ok := assign.Rhs[i].(*ast.BasicLit); ok && bl.Kind == token.STRING {
+								varAssignments[ident.Name] = unquote(bl.Value)
+							}
+						}
+					}
+				}
+
+				if be, ok := n.(*ast.CallExpr); ok {
+					if v.recog.IsBy(be) {
+						if s := firstStringArg(be); s != "" {
+							v.current().PrepSteps = append(v.current().PrepSteps, TestStep{Text: s})
+						}
+					} else if v.recog.IsSkip(be) {
+						// Skip calls in Before* blocks will be transformed into separate test entries
+						s := firstStringArg(be)
+						if s == "" {
+							// Try to resolve from variable
+							s = firstVarArg(be, varAssignments)
+						}
+						if s != "" {
+							v.current().SkipConditions = append(v.current().SkipConditions, TestStep{Text: s})
+						}
+					} else if info := parseExpectAssertion(be, v.recog); info != nil {
+						// Extract Expect assertions from Before* blocks as preparation validations
+						if info.Description != "" {
+							v.current().PrepSteps = append(v.current().PrepSteps, TestStep{Text: info.Description})
+						}
 					}
 				}
 				return true
@@ -77,8 +106,21 @@ func (v *visitor) visit(n ast.Node) bool {
 		tc.Labels = append(tc.Labels, extractLabels(v.recog, call)...)
 		// Collect By steps inside the It body by visiting its function literal argument
 		if fn := firstFuncLit(call); fn != nil {
+			// Track variable assignments to resolve Skip(variableName) calls
+			varAssignments := make(map[string]string)
 			// Walk only the body to collect By steps
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				// Track simple string variable assignments
+				if assign, ok := n.(*ast.AssignStmt); ok {
+					for i, lhs := range assign.Lhs {
+						if ident, ok := lhs.(*ast.Ident); ok && i < len(assign.Rhs) {
+							if bl, ok := assign.Rhs[i].(*ast.BasicLit); ok && bl.Kind == token.STRING {
+								varAssignments[ident.Name] = unquote(bl.Value)
+							}
+						}
+					}
+				}
+
 				if be, ok := n.(*ast.CallExpr); ok {
 					if v.recog.IsBy(be) {
 						if s := firstStringArg(be); s != "" {
@@ -90,9 +132,19 @@ func (v *visitor) visit(n ast.Node) bool {
 							tc.CleanupSteps = append(tc.CleanupSteps, TestStep{Text: s})
 						}
 					} else if v.recog.IsSkip(be) {
-						// Skip messages go to test case prep steps as negative prerequisites
-						if s := firstStringArg(be); s != "" {
-							tc.PrepSteps = append(tc.PrepSteps, TestStep{Text: "SKIP: " + s})
+						// Skip messages will be transformed into separate test entries
+						s := firstStringArg(be)
+						if s == "" {
+							// Try to resolve from variable
+							s = firstVarArg(be, varAssignments)
+						}
+						if s != "" {
+							tc.SkipConditions = append(tc.SkipConditions, TestStep{Text: s})
+						}
+					} else if info := parseExpectAssertion(be, v.recog); info != nil {
+						// Extract and generate descriptions from Expect assertions
+						if info.Description != "" {
+							tc.Validations = append(tc.Validations, TestStep{Text: info.Description})
 						}
 					}
 				}
@@ -136,6 +188,17 @@ func firstStringArg(call *ast.CallExpr) string {
 	return ""
 }
 
+func firstVarArg(call *ast.CallExpr, varAssignments map[string]string) string {
+	for _, a := range call.Args {
+		if ident, ok := a.(*ast.Ident); ok {
+			if val, found := varAssignments[ident.Name]; found {
+				return val
+			}
+		}
+	}
+	return ""
+}
+
 func firstFuncLit(call *ast.CallExpr) *ast.FuncLit {
 	for _, a := range call.Args {
 		if fn, ok := a.(*ast.FuncLit); ok {
@@ -143,14 +206,4 @@ func firstFuncLit(call *ast.CallExpr) *ast.FuncLit {
 		}
 	}
 	return nil
-}
-
-func unquote(s string) string {
-	if s == "" {
-		return s
-	}
-	if uq, err := strconv.Unquote(s); err == nil {
-		return uq
-	}
-	return s
 }
