@@ -174,6 +174,40 @@ done
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
 
+# Create markdown output directory
+MARKDOWN_DIR="$OUTPUT_DIR/markdown"
+mkdir -p "$MARKDOWN_DIR"
+
+# Create symlinks to repository roots for easy navigation
+print_status "Creating symlinks to repository roots..."
+
+for go_root in "${GO_ROOTS[@]}"; do
+    repo_name=$(basename "$go_root")
+    symlink_path="$OUTPUT_DIR/$repo_name"
+    # Remove existing symlink if it exists
+    if [[ -L "$symlink_path" ]]; then
+        rm "$symlink_path"
+    fi
+    # Create absolute path symlink
+    abs_repo_path="$(cd "$go_root" && pwd)"
+    ln -sf "$abs_repo_path" "$symlink_path"
+    print_status "  $repo_name -> $abs_repo_path"
+done
+
+for py_root in "${PY_ROOTS[@]}"; do
+    repo_name=$(basename "$py_root")
+    symlink_path="$OUTPUT_DIR/$repo_name"
+    # Remove existing symlink if it exists
+    if [[ -L "$symlink_path" ]]; then
+        rm "$symlink_path"
+    fi
+    # Create absolute path symlink
+    abs_repo_path="$(cd "$py_root" && pwd)"
+    ln -sf "$abs_repo_path" "$symlink_path"
+    print_status "  $repo_name -> $abs_repo_path"
+done
+echo
+
 print_status "Starting Spec Markdown Generator"
 if [[ ${#GO_ROOTS[@]} -gt 0 ]]; then
     print_status "Go repositories: ${#GO_ROOTS[@]}"
@@ -231,7 +265,7 @@ TOTAL_FILES=0
 for i in "${!GO_ROOTS[@]}"; do
     go_root="${GO_ROOTS[$i]}"
     repo_name=$(basename "$go_root")
-    outdir="../$OUTPUT_DIR/$repo_name"
+    outdir="../$MARKDOWN_DIR/$repo_name"
     print_status "  Processing $repo_name..."
     
     if [[ "$VERBOSE" == "true" ]]; then
@@ -267,16 +301,8 @@ if [[ ${#PY_ROOTS[@]} -gt 0 ]]; then
     PY_TOTAL_FILES=0
     for i in "${!PY_ROOTS[@]}"; do
         py_root="${PY_ROOTS[$i]}"
-        # Extract repository name: if path ends with /src/eco_pytests, use parent dir name
-        # Otherwise use basename
-        if [[ "$py_root" == */src/eco_pytests ]]; then
-            repo_name=$(basename "$(dirname "$(dirname "$py_root")")")
-        else
-            repo_name=$(basename "$py_root")
-        fi
-        # Normalize: replace underscores with hyphens for consistency
-        repo_name=$(echo "$repo_name" | sed 's/_/-/g')
-        outdir="$OUTPUT_DIR/$repo_name"
+        repo_name=$(basename "$py_root")
+        outdir="$MARKDOWN_DIR/$repo_name"
         print_status "  Processing $repo_name..."
         
         # Use absolute paths to avoid issues when changing directories
@@ -404,7 +430,7 @@ if [[ -n "$COMBINED_JSONL" && -f "$COMBINED_JSONL" && -s "$COMBINED_JSONL" ]]; t
                 ALL_REPO_ROOTS=("${GO_ROOTS[@]}" "${PY_ROOTS[@]}")
                 if python markdown-similarity.py \
                     --jsonl "$COMBINED_JSONL" \
-                    --markdown "$OUTPUT_DIR/" \
+                    --markdown "$MARKDOWN_DIR/" \
                     --output "$OUTPUT_DIR/markdown_similarity_results.csv" \
                     --repo-roots "${ALL_REPO_ROOTS[@]}" \
                     --threshold 0.75 \
@@ -599,7 +625,8 @@ fi
 echo
 print_success "Spec markdown generation completed!"
 print_status "Output files:"
-echo "  - $OUTPUT_DIR/ (Markdown specs organized by repository)"
+echo "  - $OUTPUT_DIR/ (Repository symlinks)"
+echo "  - $MARKDOWN_DIR/ (Markdown specs organized by repository)"
 if [[ -f "$OUTPUT_DIR/go_specs_per_it.jsonl" ]]; then
     echo "  - $OUTPUT_DIR/go_specs_per_it.jsonl (Per-It test specs in JSONL format - Go)"
 fi
@@ -621,7 +648,7 @@ print_status "Generated markdown files by repository:"
 for i in "${!GO_ROOTS[@]}"; do
     go_root="${GO_ROOTS[$i]}"
     repo_name=$(basename "$go_root")
-    outdir="$OUTPUT_DIR/$repo_name"
+    outdir="$MARKDOWN_DIR/$repo_name"
     if [[ -d "$outdir" ]]; then
         repo_files=$(find "$outdir" -name "*.md" | wc -l)
         echo "  - $repo_name (Go): $repo_files files"
@@ -629,16 +656,8 @@ for i in "${!GO_ROOTS[@]}"; do
 done
 for i in "${!PY_ROOTS[@]}"; do
     py_root="${PY_ROOTS[$i]}"
-    # Extract repository name: if path ends with /src/eco_pytests, use parent dir name
-    # Otherwise use basename
-    if [[ "$py_root" == */src/eco_pytests ]]; then
-        repo_name=$(basename "$(dirname "$(dirname "$py_root")")")
-    else
-        repo_name=$(basename "$py_root")
-    fi
-    # Normalize: replace underscores with hyphens for consistency
-    repo_name=$(echo "$repo_name" | sed 's/_/-/g')
-    outdir="$OUTPUT_DIR/$repo_name"
+    repo_name=$(basename "$py_root")
+    outdir="$MARKDOWN_DIR/$repo_name"
     if [[ -d "$outdir" ]]; then
         repo_files=$(find "$outdir" -name "*.md" | wc -l)
         echo "  - $repo_name (Python): $repo_files files"

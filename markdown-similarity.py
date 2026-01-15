@@ -557,9 +557,15 @@ def main():
         """Normalize file path to start from repository name"""
         abs_path = os.path.abspath(file_path)
 
-        for repo_root in repo_roots:
+        # Sort repo roots by length (longest first) to prefer more specific matches
+        # This ensures that /path/to/openshift-tests-private matches before /path/to/openshift-tests
+        sorted_roots = sorted(repo_roots, key=len, reverse=True)
+
+        for repo_root in sorted_roots:
             abs_repo_root = os.path.abspath(repo_root)
-            if abs_path.startswith(abs_repo_root):
+            # Ensure we're matching on directory boundaries, not just string prefixes
+            # Check if abs_path is exactly the repo root or starts with repo_root + separator
+            if abs_path == abs_repo_root or abs_path.startswith(abs_repo_root + os.sep):
                 # Get the repository name (basename of the root)
                 repo_name = os.path.basename(abs_repo_root)
                 # Get the relative path from the repo root
