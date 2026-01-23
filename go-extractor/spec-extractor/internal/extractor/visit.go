@@ -6,20 +6,23 @@ import (
 )
 
 // BuildFileSpec walks the AST and builds a high-level spec tree.
-func BuildFileSpec(res *FileResult, cliAliases map[string][]string) *FileSpec {
+func BuildFileSpec(res *FileResult, cliAliases map[string][]string, goModPath string) *FileSpec {
 	recog := NewRecognizer(res.ImportMap, cliAliases)
+	constResolver := NewConstantResolver(res, goModPath)
 	root := &Container{Kind: "Root"}
 	v := &visitor{
-		recog:       recog,
-		containerSt: []*Container{root},
+		recog:         recog,
+		constResolver: constResolver,
+		containerSt:   []*Container{root},
 	}
 	ast.Inspect(res.AST, v.visit)
 	return &FileSpec{FilePath: res.FilePath, Root: root}
 }
 
 type visitor struct {
-	recog       *Recognizer
-	containerSt []*Container
+	recog         *Recognizer
+	constResolver *ConstantResolver
+	containerSt   []*Container
 }
 
 func (v *visitor) current() *Container { return v.containerSt[len(v.containerSt)-1] }
@@ -33,7 +36,7 @@ func (v *visitor) visit(n ast.Node) bool {
 	if kind, isCont := v.recog.IsContainer(call); isCont {
 		desc := firstStringArg(call)
 		c := &Container{Kind: kind, Description: desc}
-		c.Labels = append(c.Labels, extractLabels(v.recog, call)...)
+		c.Labels = append(c.Labels, extractLabels(v.recog, v.constResolver, call)...)
 		// push container and walk its body (usually last arg is func literal)
 		parent := v.current()
 		parent.Children = append(parent.Children, c)
@@ -103,7 +106,7 @@ func (v *visitor) visit(n ast.Node) bool {
 	if v.recog.IsIt(call) {
 		desc := firstStringArg(call)
 		tc := TestCase{Description: desc}
-		tc.Labels = append(tc.Labels, extractLabels(v.recog, call)...)
+		tc.Labels = append(tc.Labels, extractLabels(v.recog, v.constResolver, call)...)
 		// Collect By steps inside the It body by visiting its function literal argument
 		if fn := firstFuncLit(call); fn != nil {
 			// Track variable assignments to resolve Skip(variableName) calls
@@ -160,7 +163,7 @@ func (v *visitor) visit(n ast.Node) bool {
 		desc := firstStringArg(call)
 		if desc != "" {
 			tc := TestCase{Description: desc}
-			tc.Labels = append(tc.Labels, extractLabels(v.recog, call)...)
+			tc.Labels = append(tc.Labels, extractLabels(v.recog, v.constResolver, call)...)
 			v.current().Cases = append(v.current().Cases, tc)
 		}
 		return true

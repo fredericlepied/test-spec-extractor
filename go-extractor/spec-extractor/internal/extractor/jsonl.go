@@ -42,6 +42,11 @@ func WritePerItJSONL(spec *FileSpec, filePath string) error {
 			// Emit original test case if it has a description
 			if tc.Description != "" {
 				rec := PerItRecord{Desc: tc.Description, FilePath: spec.FilePath}
+				// Inherit container labels
+				if len(c.Labels) > 0 {
+					rec.Labels = append(rec.Labels, c.Labels...)
+				}
+				// Add test-specific labels
 				if len(tc.Labels) > 0 {
 					rec.Labels = append(rec.Labels, tc.Labels...)
 				}

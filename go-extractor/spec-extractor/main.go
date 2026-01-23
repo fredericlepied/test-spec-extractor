@@ -138,7 +138,7 @@ func main() {
 			continue
 		}
 		// Build spec, and only write if the file contains at least one test case
-		spec := extractor.BuildFileSpec(res, cfg.aliases)
+		spec := extractor.BuildFileSpec(res, cfg.aliases, cfg.root)
 		if spec.HasTests() {
 			rel, err := filepath.Rel(cfg.root, f)
 			if err != nil {

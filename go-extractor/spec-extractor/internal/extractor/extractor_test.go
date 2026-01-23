@@ -25,7 +25,7 @@ var _ = g.Describe("top", func() {
 		t.Fatalf("parse: %v", err)
 	}
 	fr := &FileResult{FilePath: "sample.go", Package: f.Name.Name, ImportMap: map[string]string{"g": "github.com/onsi/ginkgo/v2"}, AST: f, FileSet: fset}
-	spec := BuildFileSpec(fr, nil)
+	spec := BuildFileSpec(fr, nil, "")
 
 	if len(spec.Root.Children) != 1 {
 		t.Fatalf("expected 1 top container, got %d", len(spec.Root.Children))
