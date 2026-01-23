@@ -157,10 +157,12 @@ func renderContainerWithConditions(b *bytes.Buffer, c *Container, depth int, whe
 		}
 	}
 
-	// Generate test entries from container-level Skip conditions (from Before* blocks)
-	for _, skip := range c.SkipConditions {
-		transformedDesc := transformSkipMessage(skip.Text)
-		fmt.Fprintf(b, "- **Test**: %s\n", safe(transformedDesc))
+	// Show container-level Skip conditions (from Before* blocks)
+	if len(c.SkipConditions) > 0 {
+		fmt.Fprintf(b, "- **Skip if**:\n")
+		for _, skip := range c.SkipConditions {
+			fmt.Fprintf(b, "  - %s\n", safe(skip.Text))
+		}
 	}
 
 	if len(c.Cases) > 0 {
@@ -175,6 +177,12 @@ func renderContainerWithConditions(b *bytes.Buffer, c *Container, depth int, whe
 					fmt.Fprintf(b, "  - preparation:\n")
 					for _, s := range tc.PrepSteps {
 						fmt.Fprintf(b, "    - %s\n", safe(s.Text))
+					}
+				}
+				if len(tc.SkipConditions) > 0 {
+					fmt.Fprintf(b, "  - Skip if:\n")
+					for _, skip := range tc.SkipConditions {
+						fmt.Fprintf(b, "    - %s\n", safe(skip.Text))
 					}
 				}
 				if len(tc.Steps) > 0 {
@@ -197,12 +205,6 @@ func renderContainerWithConditions(b *bytes.Buffer, c *Container, depth int, whe
 						fmt.Fprintf(b, "    - %s\n", safe(s.Text))
 					}
 				}
-			}
-
-			// Generate additional test entries from Skip conditions
-			for _, skip := range tc.SkipConditions {
-				transformedDesc := transformSkipMessage(skip.Text)
-				fmt.Fprintf(b, "- **Test**: %s\n", safe(transformedDesc))
 			}
 		}
 		fmt.Fprintln(b)

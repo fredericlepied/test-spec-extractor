@@ -35,11 +35,12 @@ class TestContext:
     containers: List[str]  # Describe > Context > When hierarchy
     container_labels: List[str]
     preparation_steps: List[str]  # Inherited + test-specific
+    skip_conditions: List[str]  # Skip conditions (inherited from container + test-specific)
     cleanup_steps: List[str]  # Inherited + test-specific
     test_description: str
     test_labels: List[str]
     test_steps: List[str]
-    test_prep_steps: List[str]  # Test-specific prep (Skip conditions)
+    test_prep_steps: List[str]  # Test-specific prep
     test_cleanup_steps: List[str]  # Test-specific cleanup
 
 
@@ -94,6 +95,7 @@ class MarkdownSimilarityAnalyzer:
             containers=[],  # Will be enriched from markdown
             container_labels=[],
             preparation_steps=spec.get("prep_steps", []),
+            skip_conditions=spec.get("skip_conditions", []),
             cleanup_steps=spec.get("cleanup_steps", []),
             test_description=spec["desc"],
             test_labels=spec.get("labels", []),
@@ -149,6 +151,7 @@ class MarkdownSimilarityAnalyzer:
         current_containers = []
         current_labels = []
         current_prep = []
+        current_skip = []
         current_cleanup = []
 
         # Optimized state machine to parse the markdown efficiently
@@ -184,6 +187,18 @@ class MarkdownSimilarityAnalyzer:
                 i += 1
                 continue
 
+            # Parse container-level Skip if sections
+            elif line.startswith("- **Skip if**:"):
+                i += 1
+                # Collect all skip conditions
+                while i < len(lines):
+                    skip_line = lines[i].strip()
+                    if not skip_line.startswith("  - "):
+                        break
+                    current_skip.append(skip_line[4:])  # Remove "  - " prefix
+                    i += 1
+                continue
+
             # Extract test cases
             elif line.startswith("- **Test**:"):
                 test_desc = line[11:].strip()
@@ -191,6 +206,7 @@ class MarkdownSimilarityAnalyzer:
                 # Skip tests with empty descriptions (but still process them)
                 test_labels = []
                 test_prep = []
+                test_skip = []
                 test_steps = []
                 test_cleanup = []
 
@@ -207,37 +223,47 @@ class MarkdownSimilarityAnalyzer:
                         break
 
                     # Parse test metadata efficiently
-                    if inner_line.startswith("- labels:"):
-                        test_labels = [l.strip() for l in inner_line[9:].split(",")]
+                    if inner_line.startswith("  - labels:"):
+                        test_labels = [l.strip() for l in inner_line[11:].split(",")]
                         i += 1
-                    elif inner_line.startswith("- preparation:"):
+                    elif inner_line.startswith("  - preparation:"):
                         i += 1
                         # Collect all preparation steps
                         while i < len(lines):
                             step_line = lines[i].strip()
-                            if not step_line.startswith("- ") or step_line.startswith("- **"):
+                            if not step_line.startswith("    - "):
                                 break
-                            test_prep.append(step_line[2:])
+                            test_prep.append(step_line[6:])
                             i += 1
                         continue  # Don't increment i again, already at next line
-                    elif inner_line.startswith("- steps:"):
+                    elif inner_line.startswith("  - Skip if:"):
+                        i += 1
+                        # Collect all skip conditions
+                        while i < len(lines):
+                            skip_line = lines[i].strip()
+                            if not skip_line.startswith("    - "):
+                                break
+                            test_skip.append(skip_line[6:])
+                            i += 1
+                        continue  # Don't increment i again, already at next line
+                    elif inner_line.startswith("  - steps:"):
                         i += 1
                         # Collect all steps
                         while i < len(lines):
                             step_line = lines[i].strip()
-                            if not step_line.startswith("- ") or step_line.startswith("- **"):
+                            if not step_line.startswith("    - "):
                                 break
-                            test_steps.append(step_line[2:])
+                            test_steps.append(step_line[6:])
                             i += 1
                         continue  # Don't increment i again, already at next line
-                    elif inner_line.startswith("- cleanup:"):
+                    elif inner_line.startswith("  - cleanup:"):
                         i += 1
                         # Collect all cleanup steps
                         while i < len(lines):
                             step_line = lines[i].strip()
-                            if not step_line.startswith("- ") or step_line.startswith("- **"):
+                            if not step_line.startswith("    - "):
                                 break
-                            test_cleanup.append(step_line[2:])
+                            test_cleanup.append(step_line[6:])
                             i += 1
                         continue  # Don't increment i again, already at next line
                     elif not inner_line:
@@ -248,11 +274,15 @@ class MarkdownSimilarityAnalyzer:
                         i += 1
 
                 # Create TestContext (even if description is empty)
+                # Combine container-level and test-level skip conditions
+                all_skip_conditions = current_skip.copy() + test_skip
+
                 context = TestContext(
                     file_path=source_file,
                     containers=current_containers.copy(),
                     container_labels=current_labels.copy(),
                     preparation_steps=current_prep.copy(),
+                    skip_conditions=all_skip_conditions,
                     cleanup_steps=current_cleanup.copy(),
                     test_description=test_desc,
                     test_labels=test_labels,
@@ -285,6 +315,7 @@ class MarkdownSimilarityAnalyzer:
                 "test_description": context.test_description,
                 "test_labels": context.test_labels,
                 "preparation_count": len(context.preparation_steps + context.test_prep_steps),
+                "skip_conditions_count": len(context.skip_conditions),
                 "steps_count": len(context.test_steps),
                 "cleanup_count": len(context.cleanup_steps + context.test_cleanup_steps),
             }
@@ -316,6 +347,11 @@ class MarkdownSimilarityAnalyzer:
             prep_text = " | ".join(all_prep)
             parts.append(f"Prerequisites: {prep_text}")
 
+        # Add skip conditions (important for semantic matching)
+        if context.skip_conditions:
+            skip_text = " | ".join(context.skip_conditions)
+            parts.append(f"Skip if: {skip_text}")
+
         # Add test steps (core functionality)
         if context.test_steps:
             steps_text = " | ".join(context.test_steps)
@@ -327,11 +363,12 @@ class MarkdownSimilarityAnalyzer:
             cleanup_text = " | ".join(all_cleanup)
             parts.append(f"Cleanup: {cleanup_text}")
 
-        # Add labels for additional context
-        all_labels = context.container_labels + context.test_labels
-        if all_labels:
-            labels_text = " ".join(all_labels)
-            parts.append(f"Labels: {labels_text}")
+        # Labels excluded from embeddings (kept in metadata only)
+        # Analysis shows labels are file-specific organizational tags with no semantic value:
+        # - 0 labels appear across multiple repos
+        # - 86.7% used ≤4 times (noise ratio)
+        # - Labels used for test filtering (ginkgo --label-filter), not semantic categorization
+        # See spec-md/label_recommendation.md for full analysis
 
         return " || ".join(parts)
 

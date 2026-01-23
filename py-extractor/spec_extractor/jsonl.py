@@ -43,6 +43,17 @@ def _emit_container(container: Container, file_path: str, f):
         if prep_steps:
             rec["prep_steps"] = prep_steps
 
+        # SkipConditions: Container.SkipConditions + TestCase.SkipConditions (in order)
+        skip_conditions = []
+        if container.skip_conditions:
+            for skip in container.skip_conditions:
+                skip_conditions.append(skip.text)
+        if test_case.skip_conditions:
+            for skip in test_case.skip_conditions:
+                skip_conditions.append(skip.text)
+        if skip_conditions:
+            rec["skip_conditions"] = skip_conditions
+
         # Steps: TestCase.Steps only
         steps = []
         for step in test_case.steps:
@@ -68,4 +79,3 @@ def _emit_container(container: Container, file_path: str, f):
     # Recursively process children
     for child in container.children:
         _emit_container(child, file_path, f)
-

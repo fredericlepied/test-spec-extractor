@@ -15,4 +15,3 @@ __all__ = [
     "render_markdown",
     "write_per_it_jsonl",
 ]
-

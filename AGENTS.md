@@ -157,3 +157,45 @@
 - Purpose-based filtering to reduce false positives
 - Technology compatibility checking for meaningful matches
 - Operation validation to confirm functional similarity
+
+## Label Handling for Semantic Similarity
+
+### Label Exclusion from Embeddings
+
+**Decision**: Labels are **excluded from embeddings** but **preserved in metadata**.
+
+**Rationale** (based on comprehensive analysis in `spec-md/label_recommendation.md`):
+- **No cross-repository labels**: 0 labels appear in multiple repos
+- **86.7% noise ratio**: 249/287 labels used ≤4 times (one-off identifiers, not categories)
+- **File-specific organizational tags**: Labels are used for Ginkgo test filtering (`ginkgo --label-filter`), not semantic categorization
+- **Inconsistent ontology**: Mixed kebab-case, CamelCase, and ad-hoc naming across repos
+
+### Label Usage
+
+**Labels ARE used for**:
+- ✅ Filtering results by feature area (metadata filtering)
+- ✅ Reporting label distribution in analysis
+- ✅ CI/CD test selection and organization
+- ✅ Intra-file test suite grouping
+
+**Labels are NOT used for**:
+- ❌ Semantic similarity embeddings (adds noise)
+- ❌ Cross-file test categorization
+- ❌ Multi-repo consistency matching
+
+### Implementation Location
+
+- **Extractor output**: Labels included in JSONL `labels` field and markdown `- **labels**:` sections
+- **Metadata**: Labels preserved in `TestContext.container_labels` and `TestContext.test_labels`
+- **Embeddings**: Labels excluded in `markdown-similarity.py::_create_combined_text()` (lines 366-371)
+
+### Analysis Results
+
+Based on extraction from 4 repositories:
+- **287 unique labels** across 688 occurrences
+- **Top label frequency**: "egress" (28 times, all in 1 file)
+- **Single-use labels**: 160 (55.7%)
+- **Rare labels (2-4 uses)**: 89 (31.0%)
+- **Frequent labels (10+ uses)**: Only 9 (3.1%)
+
+See `analyze_labels.py` for label extraction and `spec-md/label_analysis.json` for full frequency data.

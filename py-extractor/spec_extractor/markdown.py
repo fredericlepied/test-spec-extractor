@@ -17,7 +17,9 @@ def render_markdown(spec: FileSpec) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
-def _render_container(lines: List[str], container: Container, depth: int, when_conditions: List[str]):
+def _render_container(
+    lines: List[str], container: Container, depth: int, when_conditions: List[str]
+):
     """Render a container recursively, matching Go extractor format."""
     # Heading level by depth: 0=>###, 1=>####, 2=>#####
     level = 3 + depth
@@ -43,6 +45,12 @@ def _render_container(lines: List[str], container: Container, depth: int, when_c
         for step in container.cleanup_steps:
             lines.append(f"  - {_safe(step.text)}\n")
 
+    # Show container-level Skip conditions (from Before* blocks)
+    if container.skip_conditions:
+        lines.append("- **Skip if**:\n")
+        for skip in container.skip_conditions:
+            lines.append(f"  - {_safe(skip.text)}\n")
+
     if container.cases:
         for test_case in container.cases:
             lines.append(f"- **Test**: {_safe(test_case.description)}\n")
@@ -52,6 +60,10 @@ def _render_container(lines: List[str], container: Container, depth: int, when_c
                 lines.append("  - preparation:\n")
                 for step in test_case.prep_steps:
                     lines.append(f"    - {_safe(step.text)}\n")
+            if test_case.skip_conditions:
+                lines.append("  - Skip if:\n")
+                for skip in test_case.skip_conditions:
+                    lines.append(f"    - {_safe(skip.text)}\n")
             if test_case.steps:
                 lines.append("  - steps:\n")
                 for step in test_case.steps:
@@ -78,4 +90,3 @@ def _safe(s: str) -> str:
     # Escape underscores
     s = s.replace("_", "\\_")
     return s
-

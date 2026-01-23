@@ -19,7 +19,8 @@ class TestCase:
     def __init__(self):
         self.description: str = ""
         self.labels: List[str] = []
-        self.prep_steps: List[TestStep] = []  # Individual test prerequisites (including Skip conditions)
+        self.prep_steps: List[TestStep] = []  # Individual test prerequisites
+        self.skip_conditions: List[TestStep] = []  # Skip conditions (rendered as "Skip if" section)
         self.steps: List[TestStep] = []
         self.cleanup_steps: List[TestStep] = []  # Cleanup actions and Fail messages
 
@@ -36,7 +37,12 @@ class Container:
         self.labels: List[str] = []
         self.children: List["Container"] = []
         self.prep_steps: List[TestStep] = []  # By(...) found in active Before* under this container
-        self.cleanup_steps: List[TestStep] = []  # By(...) found in active After* under this container
+        self.skip_conditions: List[TestStep] = (
+            []
+        )  # Skip(...) found in Before* blocks (rendered as "Skip if" section)
+        self.cleanup_steps: List[TestStep] = (
+            []
+        )  # By(...) found in active After* under this container
         self.cases: List[TestCase] = []
 
     def __repr__(self) -> str:
@@ -68,4 +74,3 @@ def _container_has_tests(c: Container) -> bool:
         if _container_has_tests(child):
             return True
     return False
-

@@ -61,13 +61,10 @@ class TestVisitor(ast.NodeVisitor):
     def visit_ClassDef(self, node: ast.ClassDef):
         """Visit a class definition."""
         # Check if this is a test class
-        is_test_class = (
-            node.name.startswith("Test")
-            or any(
-                base.id == "TestCase"
-                for base in node.bases
-                if isinstance(base, ast.Name) and hasattr(base, "id")
-            )
+        is_test_class = node.name.startswith("Test") or any(
+            base.id == "TestCase"
+            for base in node.bases
+            if isinstance(base, ast.Name) and hasattr(base, "id")
         )
 
         if is_test_class:
@@ -120,7 +117,9 @@ class TestVisitor(ast.NodeVisitor):
 
         # If we're at root level (no test class), create a file-level container
         if len(self.container_stack) == 1:  # Only root in stack
-            file_container = Container(kind="Describe", description=os.path.basename(self.file_path))
+            file_container = Container(
+                kind="Describe", description=os.path.basename(self.file_path)
+            )
             self.root.children.append(file_container)
             self.container_stack.append(file_container)
 
@@ -175,7 +174,9 @@ class TestVisitor(ast.NodeVisitor):
         # create a file-level container
         if not self.root.children and self.root.cases:
             # Move cases to a file-level container
-            file_container = Container(kind="Describe", description=os.path.basename(spec.file_path))
+            file_container = Container(
+                kind="Describe", description=os.path.basename(spec.file_path)
+            )
             file_container.cases = self.root.cases
             self.root.cases = []
             self.root.children.append(file_container)
@@ -208,7 +209,10 @@ class TestVisitor(ast.NodeVisitor):
                 if isinstance(func, ast.Attribute):
                     if func.attr == "parametrize":
                         if isinstance(func.value, ast.Attribute) and func.value.attr == "mark":
-                            if isinstance(func.value.value, ast.Name) and func.value.value.id == "pytest":
+                            if (
+                                isinstance(func.value.value, ast.Name)
+                                and func.value.value.id == "pytest"
+                            ):
                                 return True
         return False
 
@@ -259,7 +263,10 @@ class TestVisitor(ast.NodeVisitor):
                 if isinstance(func, ast.Attribute):
                     # @pytest.mark.label_name
                     if isinstance(func.value, ast.Attribute) and func.value.attr == "mark":
-                        if isinstance(func.value.value, ast.Name) and func.value.value.id == "pytest":
+                        if (
+                            isinstance(func.value.value, ast.Name)
+                            and func.value.value.id == "pytest"
+                        ):
                             label = func.attr
                             if label not in ["skip", "skipif", "parametrize", "usefixtures"]:
                                 labels.append(label)
@@ -278,7 +285,10 @@ class TestVisitor(ast.NodeVisitor):
                 if isinstance(func, ast.Attribute):
                     if func.attr in ["skip", "skipif"]:
                         if isinstance(func.value, ast.Attribute) and func.value.attr == "mark":
-                            if isinstance(func.value.value, ast.Name) and func.value.value.id == "pytest":
+                            if (
+                                isinstance(func.value.value, ast.Name)
+                                and func.value.value.id == "pytest"
+                            ):
                                 # Look for reason in keyword arguments
                                 for keyword in decorator.keywords:
                                     if keyword.arg == "reason":
@@ -307,7 +317,10 @@ class TestVisitor(ast.NodeVisitor):
                 func = decorator.func
                 if isinstance(func, ast.Attribute) and func.attr == "usefixtures":
                     if isinstance(func.value, ast.Attribute) and func.value.attr == "mark":
-                        if isinstance(func.value.value, ast.Name) and func.value.value.id == "pytest":
+                        if (
+                            isinstance(func.value.value, ast.Name)
+                            and func.value.value.id == "pytest"
+                        ):
                             # Extract fixture names from args
                             for arg in decorator.args:
                                 fixture_name = _get_string_value(arg)
@@ -316,7 +329,9 @@ class TestVisitor(ast.NodeVisitor):
 
         return prep_steps
 
-    def _extract_class_setup_teardown(self, node: ast.ClassDef) -> tuple[List[TestStep], List[TestStep]]:
+    def _extract_class_setup_teardown(
+        self, node: ast.ClassDef
+    ) -> tuple[List[TestStep], List[TestStep]]:
         """Extract setup and teardown steps from class methods."""
         setup_steps = []
         teardown_steps = []
@@ -453,7 +468,7 @@ class TestVisitor(ast.NodeVisitor):
 
     def _extract_step_from_assert(self, stmt: ast.Assert) -> Optional[str]:
         """Extract step description from an assert statement.
-        
+
         Extracts the assert message/condition and converts to positive form,
         matching the Go extractor's By() style (e.g., "ensuring all clocks are LOCKED").
         """
@@ -468,26 +483,26 @@ class TestVisitor(ast.NodeVisitor):
                 assert_msg = self._convert_to_positive_form(assert_msg)
                 if assert_msg:
                     return assert_msg
-        
+
         # If no message, extract the condition text and convert to positive form
         condition_text = self._extract_assert_condition_text(stmt.test)
         if condition_text:
             return self._convert_to_positive_form(condition_text)
-        
+
         return "verifying condition"
-    
+
     def _convert_to_positive_form(self, text: str) -> str:
         """Convert assert message/condition to positive form.
-        
+
         Removes negative prefixes like "Fail with", "fail", etc. and converts
         to positive statements matching Go extractor style (e.g., "ensuring", "verifying").
         """
         if not text:
             return "verifying condition"
-        
+
         text = text.strip()
         original_text = text
-        
+
         # Remove common negative prefixes (case-insensitive)
         prefixes_to_remove = [
             "fail with ",
@@ -495,56 +510,68 @@ class TestVisitor(ast.NodeVisitor):
             "error: ",
             "error ",
         ]
-        
+
         text_lower = text.lower()
         for prefix in prefixes_to_remove:
             if text_lower.startswith(prefix):
-                text = text[len(prefix):].strip()
+                text = text[len(prefix) :].strip()
                 break
-        
+
         # If text is empty after removing prefix, return a generic positive form
         if not text:
             return "verifying condition"
-        
+
         # Check if text already starts with a positive verb (ensuring, verifying, checking, etc.)
-        positive_verbs = ["ensuring", "verifying", "checking", "waiting", "getting", "updating", "resetting", "creating"]
+        positive_verbs = [
+            "ensuring",
+            "verifying",
+            "checking",
+            "waiting",
+            "getting",
+            "updating",
+            "resetting",
+            "creating",
+        ]
         text_lower = text.lower()
         if any(text_lower.startswith(verb + " ") for verb in positive_verbs):
             return text
-        
+
         # For function calls, always add "verifying" prefix
         if "(" in text:
             return f"verifying {text}"
-        
+
         # For descriptive messages, add appropriate verb based on content
         # If it's about checking/verifying something, use "verifying" or "ensuring"
         if any(word in text_lower for word in ["check", "verify", "validate", "test", "confirm"]):
             # If it doesn't already start with a verb, add "verifying"
-            if not any(text_lower.startswith(verb) for verb in ["check", "verify", "validate", "test", "confirm"]):
+            if not any(
+                text_lower.startswith(verb)
+                for verb in ["check", "verify", "validate", "test", "confirm"]
+            ):
                 return f"verifying {text}"
             return text
-        
+
         # For simple conditions (short, no spaces), add "verifying"
         if len(text) < 30 and " " not in text:
             return f"verifying {text}"
-        
+
         # For longer descriptive text, try to add appropriate verb
         # If it starts with a noun or describes an action, add "ensuring" or "verifying"
         if text_lower.startswith(("health", "status", "state", "condition", "result")):
             return f"verifying {text}"
-        
+
         # Default: add "verifying" for consistency
         return f"verifying {text}"
-    
+
     def _extract_assert_condition_text(self, expr: ast.expr) -> Optional[str]:
         """Extract readable text from assert condition expression."""
         # Try using ast.unparse if available (Python 3.9+)
         try:
-            if hasattr(ast, 'unparse'):
+            if hasattr(ast, "unparse"):
                 return ast.unparse(expr)
         except Exception:
             pass
-        
+
         # Fallback to manual extraction
         if isinstance(expr, ast.Compare):
             # Comparison: x == y, x > y, etc.
@@ -553,19 +580,23 @@ class TestVisitor(ast.NodeVisitor):
                 op_strs = []
                 for i, op in enumerate(expr.ops):
                     op_text = self._op_to_text(op)
-                    comparator = self._extract_expr_text(expr.comparators[i]) if i < len(expr.comparators) else None
+                    comparator = (
+                        self._extract_expr_text(expr.comparators[i])
+                        if i < len(expr.comparators)
+                        else None
+                    )
                     if comparator:
                         op_strs.append(f"{left} {op_text} {comparator}")
                     else:
                         op_strs.append(f"{left} {op_text} ?")
                 if op_strs:
                     return " and ".join(op_strs)
-        
+
         # Try to extract as expression text
         expr_text = self._extract_expr_text(expr)
         if expr_text:
             return expr_text
-        
+
         # Last resort: try to get string representation
         try:
             return str(expr)
@@ -641,4 +672,3 @@ class TestVisitor(ast.NodeVisitor):
             ast.NotIn: "not in",
         }
         return op_map.get(type(op), "compares")
-
