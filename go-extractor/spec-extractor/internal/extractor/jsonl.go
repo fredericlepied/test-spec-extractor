@@ -8,6 +8,7 @@ import (
 
 type PerItRecord struct {
 	Desc           string   `json:"desc"`
+	TestID         string   `json:"test_id,omitempty"`
 	Labels         []string `json:"labels,omitempty"`
 	PrepSteps      []string `json:"prep_steps,omitempty"`
 	SkipConditions []string `json:"skip_conditions,omitempty"`
@@ -42,6 +43,10 @@ func WritePerItJSONL(spec *FileSpec, filePath string) error {
 			// Emit original test case if it has a description
 			if tc.Description != "" {
 				rec := PerItRecord{Desc: tc.Description, FilePath: spec.FilePath}
+				// Add test ID if present
+				if tc.TestID != "" {
+					rec.TestID = tc.TestID
+				}
 				// Inherit container labels
 				if len(c.Labels) > 0 {
 					rec.Labels = append(rec.Labels, c.Labels...)

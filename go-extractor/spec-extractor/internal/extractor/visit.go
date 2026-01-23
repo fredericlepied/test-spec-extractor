@@ -105,8 +105,27 @@ func (v *visitor) visit(n ast.Node) bool {
 
 	if v.recog.IsIt(call) {
 		desc := firstStringArg(call)
-		tc := TestCase{Description: desc}
+
+		// Parse test description to extract embedded labels and test ID
+		parsed := ParseTestDescription(desc)
+
+		tc := TestCase{Description: parsed.Description}
+
+		// Add labels from Label() calls
 		tc.Labels = append(tc.Labels, extractLabels(v.recog, v.constResolver, call)...)
+
+		// Add labels extracted from description (if any)
+		if len(parsed.Labels) > 0 {
+			tc.Labels = append(tc.Labels, parsed.Labels...)
+		}
+
+		// Set test ID (from embedded pattern or reportxml.ID())
+		if parsed.TestID != "" {
+			tc.TestID = parsed.TestID
+		} else {
+			tc.TestID = extractTestID(v.recog, v.constResolver, call)
+		}
+
 		// Collect By steps inside the It body by visiting its function literal argument
 		if fn := firstFuncLit(call); fn != nil {
 			// Track variable assignments to resolve Skip(variableName) calls
@@ -162,8 +181,26 @@ func (v *visitor) visit(n ast.Node) bool {
 	if v.recog.IsEntry(call) {
 		desc := firstStringArg(call)
 		if desc != "" {
-			tc := TestCase{Description: desc}
+			// Parse test description to extract embedded labels and test ID
+			parsed := ParseTestDescription(desc)
+
+			tc := TestCase{Description: parsed.Description}
+
+			// Add labels from Label() calls
 			tc.Labels = append(tc.Labels, extractLabels(v.recog, v.constResolver, call)...)
+
+			// Add labels extracted from description (if any)
+			if len(parsed.Labels) > 0 {
+				tc.Labels = append(tc.Labels, parsed.Labels...)
+			}
+
+			// Set test ID (from embedded pattern or reportxml.ID())
+			if parsed.TestID != "" {
+				tc.TestID = parsed.TestID
+			} else {
+				tc.TestID = extractTestID(v.recog, v.constResolver, call)
+			}
+
 			v.current().Cases = append(v.current().Cases, tc)
 		}
 		return true

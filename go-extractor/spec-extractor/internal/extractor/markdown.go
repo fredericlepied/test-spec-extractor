@@ -173,6 +173,23 @@ func renderContainerWithConditions(b *bytes.Buffer, c *Container, depth int, whe
 				if len(tc.Labels) > 0 {
 					fmt.Fprintf(b, "  - labels: %s\n", strings.Join(tc.Labels, ", "))
 				}
+				if tc.TestID != "" {
+					// Detect ID format and render appropriate Polarion link
+					// - Numeric IDs from reportxml.ID(): use OCP- prefix
+					// - Alphanumeric IDs from Author: pattern: use as-is (e.g., C00113)
+					var polarionID, displayID string
+					if tc.TestID[0] >= '0' && tc.TestID[0] <= '9' {
+						// Numeric ID: reportxml.ID("12345") -> OCP-12345
+						polarionID = "OCP-" + tc.TestID
+						displayID = polarionID
+					} else {
+						// Alphanumeric ID: Author pattern (e.g., C00113)
+						polarionID = tc.TestID
+						displayID = tc.TestID
+					}
+					polarionURL := fmt.Sprintf("https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=%s", polarionID)
+					fmt.Fprintf(b, "  - test_id: [%s](%s)\n", displayID, polarionURL)
+				}
 				if len(tc.PrepSteps) > 0 {
 					fmt.Fprintf(b, "  - preparation:\n")
 					for _, s := range tc.PrepSteps {

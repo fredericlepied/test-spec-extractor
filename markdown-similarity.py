@@ -38,6 +38,7 @@ class TestContext:
     skip_conditions: List[str]  # Skip conditions (inherited from container + test-specific)
     cleanup_steps: List[str]  # Inherited + test-specific
     test_description: str
+    polarion_test_id: str  # Test ID from reportxml.ID("12345") - excluded from embeddings
     test_labels: List[str]
     test_steps: List[str]
     test_prep_steps: List[str]  # Test-specific prep
@@ -98,6 +99,7 @@ class MarkdownSimilarityAnalyzer:
             skip_conditions=spec.get("skip_conditions", []),
             cleanup_steps=spec.get("cleanup_steps", []),
             test_description=spec["desc"],
+            polarion_test_id=spec.get("test_id", ""),
             test_labels=spec.get("labels", []),
             test_steps=spec.get("steps", []),
             test_prep_steps=[],  # Will be separated from prep_steps
@@ -205,6 +207,7 @@ class MarkdownSimilarityAnalyzer:
 
                 # Skip tests with empty descriptions (but still process them)
                 test_labels = []
+                polarion_test_id = ""
                 test_prep = []
                 test_skip = []
                 test_steps = []
@@ -225,6 +228,20 @@ class MarkdownSimilarityAnalyzer:
                     # Parse test metadata efficiently
                     if inner_line.startswith("  - labels:"):
                         test_labels = [l.strip() for l in inner_line[11:].split(",")]
+                        i += 1
+                    elif inner_line.startswith("  - test_id:"):
+                        # Extract test ID from markdown link: [OCP-12345](url) or [C00113](url)
+                        test_id_text = inner_line[12:].strip()
+                        if test_id_text.startswith("["):
+                            # Extract the ID from [OCP-12345] or [C00113]
+                            end_bracket = test_id_text.find("]")
+                            if end_bracket > 0:
+                                full_id = test_id_text[1:end_bracket]  # Skip "["
+                                # Remove OCP- prefix if present
+                                if full_id.startswith("OCP-"):
+                                    polarion_test_id = full_id[4:]  # Skip "OCP-"
+                                else:
+                                    polarion_test_id = full_id
                         i += 1
                     elif inner_line.startswith("  - preparation:"):
                         i += 1
@@ -285,6 +302,7 @@ class MarkdownSimilarityAnalyzer:
                     skip_conditions=all_skip_conditions,
                     cleanup_steps=current_cleanup.copy(),
                     test_description=test_desc,
+                    polarion_test_id=polarion_test_id,
                     test_labels=test_labels,
                     test_steps=test_steps,
                     test_prep_steps=test_prep,
@@ -363,12 +381,9 @@ class MarkdownSimilarityAnalyzer:
             cleanup_text = " | ".join(all_cleanup)
             parts.append(f"Cleanup: {cleanup_text}")
 
-        # Labels excluded from embeddings (kept in metadata only)
-        # Analysis shows labels are file-specific organizational tags with no semantic value:
-        # - 0 labels appear across multiple repos
-        # - 86.7% used ≤4 times (noise ratio)
-        # - Labels used for test filtering (ginkgo --label-filter), not semantic categorization
-        # See spec-md/label_recommendation.md for full analysis
+        # Labels and test IDs excluded from embeddings (kept in metadata only)
+        # - Labels: file-specific organizational tags with no semantic value (see label_recommendation.md)
+        # - Test IDs: Polarion identifiers for traceability, not semantic similarity
 
         return " || ".join(parts)
 
