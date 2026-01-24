@@ -1,6 +1,6 @@
-sentence-transformers>=2.7.0
-faiss-cpu>=1.7
-numpy
-pandas
-tqdm
-requests
+sentence-transformers==5.2.0
+faiss-cpu==1.13.2
+numpy==2.4.1
+pandas==3.0.0
+tqdm==4.67.1
+requests==2.32.5
