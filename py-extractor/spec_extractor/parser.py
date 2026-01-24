@@ -6,6 +6,7 @@ import sys
 from typing import Dict, List, Optional
 
 from .types import Container, TestCase, TestStep, FileSpec
+from .fixture_registry import FixtureRegistry
 
 # Python version compatibility
 PYTHON_38_PLUS = sys.version_info >= (3, 8)
@@ -21,7 +22,7 @@ def _get_string_value(expr: ast.expr) -> Optional[str]:
     return None
 
 
-def parse_file(file_path: str) -> FileSpec:
+def parse_file(file_path: str, fixture_registry: Optional[FixtureRegistry] = None) -> FileSpec:
     """Parse a Python file and build FileSpec."""
     with open(file_path, "r", encoding="utf-8") as f:
         try:
@@ -31,25 +32,26 @@ def parse_file(file_path: str) -> FileSpec:
             return FileSpec(file_path=file_path)
 
     spec = FileSpec(file_path=file_path)
-    visitor = TestVisitor(file_path)
+    visitor = TestVisitor(file_path, fixture_registry)
     visitor.visit(tree)
     visitor.build_spec(spec)
     return spec
 
 
-def build_file_spec(file_path: str) -> FileSpec:
+def build_file_spec(file_path: str, fixture_registry: Optional[FixtureRegistry] = None) -> FileSpec:
     """Build FileSpec from a Python file (alias for parse_file for compatibility)."""
-    return parse_file(file_path)
+    return parse_file(file_path, fixture_registry)
 
 
 class TestVisitor(ast.NodeVisitor):
     """AST visitor that builds Container/TestCase structure from Python tests."""
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, fixture_registry: Optional[FixtureRegistry] = None):
         self.file_path = file_path
+        self.fixture_registry = fixture_registry
         self.root = Container(kind="Root")
         self.container_stack: List[Container] = [self.root]
-        self.fixtures: Dict[str, List[TestStep]] = {}  # fixture_name -> steps
+        self.fixtures: Dict[str, List[TestStep]] = {}  # fixture_name -> steps (local fixtures)
         self.current_class: Optional[str] = None
         self.class_setup_ops: Dict[str, List[TestStep]] = {}  # class_name -> setup steps
         self.class_teardown_ops: Dict[str, List[TestStep]] = {}  # class_name -> teardown steps
@@ -131,10 +133,12 @@ class TestVisitor(ast.NodeVisitor):
         # Extract skip conditions
         skip_reason = self._extract_skip_reason(node.decorator_list)
         if skip_reason:
-            test_case.prep_steps.append(TestStep(text=f"SKIP: {skip_reason}"))
+            test_case.skip_conditions.append(TestStep(text=skip_reason))
 
-        # Extract steps from function body
-        test_case.steps = self._extract_steps_from_function(node)
+        # Extract steps and validations from function body
+        steps, validations = self._extract_steps_and_validations(node)
+        test_case.steps = steps
+        test_case.validations = validations
 
         # Extract fixture dependencies and add as prep steps
         fixture_prep_steps = self._extract_fixture_prep_steps(node)
@@ -157,7 +161,9 @@ class TestVisitor(ast.NodeVisitor):
                     param_test_case.description = f"{test_case.description} [{param_value}]"
                     param_test_case.labels = test_case.labels.copy()
                     param_test_case.prep_steps = test_case.prep_steps.copy()
+                    param_test_case.skip_conditions = test_case.skip_conditions.copy()
                     param_test_case.steps = test_case.steps.copy()
+                    param_test_case.validations = test_case.validations.copy()
                     param_test_case.cleanup_steps = test_case.cleanup_steps.copy()
                     self.current_container().cases.append(param_test_case)
             else:
@@ -308,8 +314,14 @@ class TestVisitor(ast.NodeVisitor):
 
         # Check function parameters for fixture names
         for arg in node.args.args:
+            # First check local fixtures
             if arg.arg in self.fixtures:
                 prep_steps.extend(self.fixtures[arg.arg])
+            # Then check global fixture registry
+            elif self.fixture_registry:
+                fixture_steps = self.fixture_registry.get_fixture(arg.arg)
+                if fixture_steps:
+                    prep_steps.extend(fixture_steps)
 
         # Check for @pytest.mark.usefixtures decorator
         for decorator in node.decorator_list:
@@ -324,8 +336,17 @@ class TestVisitor(ast.NodeVisitor):
                             # Extract fixture names from args
                             for arg in decorator.args:
                                 fixture_name = _get_string_value(arg)
-                                if fixture_name and fixture_name in self.fixtures:
-                                    prep_steps.extend(self.fixtures[fixture_name])
+                                if fixture_name:
+                                    # Check local fixtures first
+                                    if fixture_name in self.fixtures:
+                                        prep_steps.extend(self.fixtures[fixture_name])
+                                    # Then check global registry
+                                    elif self.fixture_registry:
+                                        fixture_steps = self.fixture_registry.get_fixture(
+                                            fixture_name
+                                        )
+                                        if fixture_steps:
+                                            prep_steps.extend(fixture_steps)
 
         return prep_steps
 
@@ -345,8 +366,36 @@ class TestVisitor(ast.NodeVisitor):
 
         return setup_steps, teardown_steps
 
+    def _extract_steps_and_validations(
+        self, node: ast.FunctionDef
+    ) -> tuple[List[TestStep], List[TestStep]]:
+        """Extract steps and validations separately from a function body.
+
+        Returns:
+            (steps, validations) where steps are actions and validations are assertions
+        """
+        steps = []
+        validations = []
+
+        if not node.body:
+            return steps, validations
+
+        for stmt in node.body:
+            # Check if this is an assertion - goes to validations
+            if isinstance(stmt, ast.Assert):
+                validation_text = self._extract_step_from_assert(stmt)
+                if validation_text:
+                    validations.append(TestStep(text=validation_text))
+            else:
+                # Not an assertion - goes to steps
+                step_text = self._extract_step_from_stmt(stmt)
+                if step_text:
+                    steps.append(TestStep(text=step_text))
+
+        return steps, validations
+
     def _extract_steps_from_function(self, node: ast.FunctionDef) -> List[TestStep]:
-        """Extract steps from a function body."""
+        """Extract steps from a function body (for fixtures and setup/teardown)."""
         steps = []
         if not node.body:
             return steps
@@ -364,8 +413,8 @@ class TestVisitor(ast.NodeVisitor):
             # Expression statement (function call, etc.)
             return self._extract_step_from_expr(stmt.value)
         elif isinstance(stmt, ast.Assert):
-            # Assert statement
-            return self._extract_step_from_assert(stmt)
+            # Assert statement - skip here, handled in _extract_steps_and_validations
+            return None
         elif isinstance(stmt, ast.Assign):
             # Assignment - check if it's a meaningful operation
             return self._extract_step_from_assign(stmt)
@@ -425,7 +474,28 @@ class TestVisitor(ast.NodeVisitor):
                         return f"getting {resource} resource"
                 return "getting resource"
             elif func_name == "get_resource_from_namespace":
+                # Extract resource type and namespace
+                args = self._extract_call_arguments(call)
+                if len(args) >= 2:
+                    resource_type = args[0]
+                    namespace = args[1]
+                    return f"get {resource_type} from {namespace} namespace"
+                elif len(args) == 1:
+                    return f"get {args[0]} from namespace"
                 return "getting resource from namespace"
+            elif func_name == "get_operator_info":
+                # Extract operator name and namespace
+                args = self._extract_call_arguments(call)
+                if len(args) >= 2:
+                    operator_name = args[0]
+                    namespace = args[1]
+                    # Make operator name more readable
+                    readable_name = operator_name.replace("-", " ").title()
+                    return f"get {readable_name} operator info from {namespace} namespace"
+                elif len(args) == 1:
+                    readable_name = args[0].replace("-", " ").title()
+                    return f"get {readable_name} operator info"
+                return "get operator info"
             elif func_name == "get_pods_list":
                 return "getting pods list"
             elif func_name == "get_node_status":
@@ -565,18 +635,29 @@ class TestVisitor(ast.NodeVisitor):
 
     def _extract_assert_condition_text(self, expr: ast.expr) -> Optional[str]:
         """Extract readable text from assert condition expression."""
-        # Try using ast.unparse if available (Python 3.9+)
-        try:
-            if hasattr(ast, "unparse"):
-                return ast.unparse(expr)
-        except Exception:
-            pass
-
         # Fallback to manual extraction
         if isinstance(expr, ast.Compare):
             # Comparison: x == y, x > y, etc.
             left = self._extract_expr_text(expr.left)
             if left:
+                # Handle special case: "x_info is not None" -> "X operator exists"
+                if len(expr.ops) == 1 and isinstance(expr.ops[0], ast.IsNot):
+                    if len(expr.comparators) == 1:
+                        comp = expr.comparators[0]
+                        if isinstance(comp, ast.Constant) and comp.value is None:
+                            # Check if variable name ends with _info (operator info pattern)
+                            if left.endswith("_info"):
+                                operator_name = left[:-5]  # Remove "_info"
+                                # Make operator name readable
+                                readable_name = operator_name.replace("_", " ").upper()
+                                return f"{readable_name} operator exists"
+                            # Check if variable name ends with _pods (pod list pattern)
+                            elif left.endswith("_pods"):
+                                resource_name = left[:-5]  # Remove "_pods"
+                                readable_name = resource_name.replace("_", " ").upper()
+                                return f"{readable_name} pods exist"
+
+                # Handle general comparisons
                 op_strs = []
                 for i, op in enumerate(expr.ops):
                     op_text = self._op_to_text(op)
@@ -596,6 +677,13 @@ class TestVisitor(ast.NodeVisitor):
         expr_text = self._extract_expr_text(expr)
         if expr_text:
             return expr_text
+
+        # Try using ast.unparse as last resort (Python 3.9+)
+        try:
+            if hasattr(ast, "unparse"):
+                return ast.unparse(expr)
+        except Exception:
+            pass
 
         # Last resort: try to get string representation
         try:
@@ -643,12 +731,30 @@ class TestVisitor(ast.NodeVisitor):
         """Extract string literal from expression."""
         return _get_string_value(expr)
 
+    def _extract_call_arguments(self, call: ast.Call) -> List[str]:
+        """Extract string arguments from a function call."""
+        args = []
+        for arg in call.args:
+            str_val = _get_string_value(arg)
+            if str_val:
+                args.append(str_val)
+            elif isinstance(arg, ast.Name):
+                # Variable name as argument
+                args.append(arg.id)
+            elif isinstance(arg, ast.Attribute):
+                # Attribute access as argument (e.g., config.namespace)
+                args.append(arg.attr)
+        return args
+
     def _extract_expr_text(self, expr: ast.expr) -> Optional[str]:
         """Extract readable text from expression."""
         if isinstance(expr, ast.Name):
             return expr.id
         elif isinstance(expr, ast.Attribute):
             return expr.attr
+        elif isinstance(expr, ast.Subscript):
+            # Handle dictionary access like config["ptp_events_freerun_pass"]
+            return self._extract_subscript_text(expr)
         elif isinstance(expr, ast.Call):
             return self._extract_step_from_call(expr)
         else:
@@ -656,6 +762,65 @@ class TestVisitor(ast.NodeVisitor):
             if str_val is not None:
                 return str_val
         return None
+
+    def _extract_subscript_text(self, subscript: ast.Subscript) -> Optional[str]:
+        """Extract semantic meaning from dictionary/subscript access.
+
+        Examples:
+        - config["ptp_events_freerun_pass"] -> "PTP events FREERUN validation"
+        - config["talm_namespace"] -> "TALM namespace"
+        - data["operator_name"] -> "operator name"
+        """
+        # Get the key being accessed
+        key = _get_string_value(subscript.slice)
+        if not key:
+            return None
+
+        # Parse the key to extract semantic meaning
+        # Remove common suffixes
+        key_lower = key.lower()
+        for suffix in ["_pass", "_check", "_result", "_flag", "_status"]:
+            if key_lower.endswith(suffix):
+                key = key[: -len(suffix)]
+                break
+
+        # Convert snake_case to readable text
+        # e.g., "ptp_events_freerun" -> "PTP events FREERUN"
+        parts = key.split("_")
+        readable_parts = []
+        for part in parts:
+            # Keep known acronyms uppercase
+            if part.upper() in [
+                "PTP",
+                "ODF",
+                "LSO",
+                "OCS",
+                "TALM",
+                "API",
+                "URL",
+                "ID",
+                "CPU",
+                "GPU",
+                "FREERUN",
+                "SR",
+                "IOV",
+                "SRIOV",
+            ]:
+                readable_parts.append(part.upper())
+            else:
+                readable_parts.append(part)
+
+        readable_text = " ".join(readable_parts)
+
+        # Add semantic suffix based on original key
+        if key_lower.endswith("_pass") or key_lower.endswith("_check"):
+            return f"{readable_text} validation"
+        elif key_lower.endswith("_namespace"):
+            return f"{readable_text} namespace"
+        elif key_lower.endswith("_operator"):
+            return f"{readable_text} operator"
+        else:
+            return readable_text
 
     def _op_to_text(self, op: ast.cmpop) -> str:
         """Convert comparison operator to text."""

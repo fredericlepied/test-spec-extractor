@@ -22,10 +22,11 @@ class TestCase:
         self.prep_steps: List[TestStep] = []  # Individual test prerequisites
         self.skip_conditions: List[TestStep] = []  # Skip conditions (rendered as "Skip if" section)
         self.steps: List[TestStep] = []
+        self.validations: List[TestStep] = []  # Assertions and validations
         self.cleanup_steps: List[TestStep] = []  # Cleanup actions and Fail messages
 
     def __repr__(self) -> str:
-        return f"TestCase(description={self.description!r}, labels={self.labels}, steps={len(self.steps)})"
+        return f"TestCase(description={self.description!r}, labels={self.labels}, steps={len(self.steps)}, validations={len(self.validations)})"
 
 
 class Container:

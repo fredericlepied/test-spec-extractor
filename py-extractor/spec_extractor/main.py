@@ -9,6 +9,7 @@ from pathlib import Path
 from .parser import parse_file
 from .markdown import render_markdown
 from .jsonl import write_per_it_jsonl
+from .fixture_registry import FixtureRegistry
 
 
 def split_csv(s: str) -> list[str]:
@@ -84,6 +85,13 @@ def main():
     include_patterns = split_csv(args.include)
     exclude_patterns = split_csv(args.exclude)
 
+    # Build fixture registry from conftest.py files
+    print(f"Discovering fixtures from conftest.py files in {args.root}...", file=sys.stderr)
+    fixture_registry = FixtureRegistry()
+    fixture_registry.load_fixtures_from_root(args.root)
+    fixture_count = len(fixture_registry.fixtures)
+    print(f"Found {fixture_count} fixtures in conftest.py files", file=sys.stderr)
+
     # Find Python test files
     root_path = Path(args.root)
     files = []
@@ -107,7 +115,7 @@ def main():
     parsed = 0
     for file_path in files:
         try:
-            spec = parse_file(file_path)
+            spec = parse_file(file_path, fixture_registry)
         except Exception as e:
             # Best-effort: skip unparsable files with a warning
             print(f"warn: parse error in {file_path}: {e}", file=sys.stderr)

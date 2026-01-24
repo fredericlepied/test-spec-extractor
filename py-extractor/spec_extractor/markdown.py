@@ -68,6 +68,10 @@ def _render_container(
                 lines.append("  - steps:\n")
                 for step in test_case.steps:
                     lines.append(f"    - {_safe(step.text)}\n")
+            if test_case.validations:
+                lines.append("  - validations:\n")
+                for validation in test_case.validations:
+                    lines.append(f"    - {_safe(validation.text)}\n")
             if test_case.cleanup_steps:
                 lines.append("  - cleanup:\n")
                 for step in test_case.cleanup_steps:

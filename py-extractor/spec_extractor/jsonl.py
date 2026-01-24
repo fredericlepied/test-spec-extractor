@@ -61,6 +61,13 @@ def _emit_container(container: Container, file_path: str, f):
         if steps:
             rec["steps"] = steps
 
+        # Validations: TestCase.Validations only
+        validations = []
+        for validation in test_case.validations:
+            validations.append(validation.text)
+        if validations:
+            rec["validations"] = validations
+
         # CleanupSteps: Container.CleanupSteps + TestCase.CleanupSteps (in order)
         cleanup_steps = []
         if container.cleanup_steps:
