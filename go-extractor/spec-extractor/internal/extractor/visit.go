@@ -144,7 +144,8 @@ func (v *visitor) visit(n ast.Node) bool {
 				}
 
 				if be, ok := n.(*ast.CallExpr); ok {
-					if v.recog.IsBy(be) {
+					// Check for recognized By() calls (g.By, ginkgo.By, etc.) or custom wrappers (compat_otp.By, etc.)
+					if v.recog.IsBy(be) || isCustomByCall(be) {
 						if s := firstStringArg(be); s != "" {
 							tc.Steps = append(tc.Steps, TestStep{Text: s})
 						}
@@ -217,6 +218,34 @@ func (v *visitor) visit(n ast.Node) bool {
 	// Standalone By calls at top-level are ignored; By is handled inside It/Before/After bodies above.
 
 	return true
+}
+
+// isCustomByCall checks if a call is a custom By() wrapper (e.g., compat_otp.By())
+// that the Recognizer doesn't know about. This provides generic pattern matching
+// for any package.By() call with a single string argument, working across any test suite.
+func isCustomByCall(call *ast.CallExpr) bool {
+	// Check if this is a selector expression (package.Method)
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+
+	// Check if the method name is "By"
+	if sel.Sel.Name != "By" {
+		return false
+	}
+
+	// Verify it has exactly one string argument
+	if len(call.Args) != 1 {
+		return false
+	}
+
+	// Check if the argument is a string literal
+	if bl, ok := call.Args[0].(*ast.BasicLit); ok && bl.Kind == token.STRING {
+		return true
+	}
+
+	return false
 }
 
 func firstStringArg(call *ast.CallExpr) string {

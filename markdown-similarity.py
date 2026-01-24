@@ -348,6 +348,97 @@ class MarkdownSimilarityAnalyzer:
 
         return documents
 
+    @staticmethod
+    def _is_generic_assertion(text: str) -> bool:
+        """
+        Filter generic assertion boilerplate that adds noise to embeddings.
+
+        Generic patterns are code-level implementation details that don't describe
+        the domain-specific functionality being tested. These patterns appear frequently
+        across different tests but don't help distinguish unique test behaviors.
+
+        Returns True if the text matches a generic pattern and should be filtered.
+        """
+        text_lower = text.lower().strip()
+
+        # Generic error handling patterns
+        generic_error_patterns = [
+            "operation succeeds without error",
+            "operation returns an error",
+            "succeeds without error",
+            "returns an error",
+            "operation succeeds",
+            "operation fails",
+        ]
+
+        # Generic boolean check patterns (exact matches only)
+        generic_boolean_patterns = [
+            "is true",
+            "is false",
+        ]
+
+        # Generic existence check patterns
+        generic_existence_patterns = [
+            "is nil",
+            "exists",
+            "is zero",
+            "has a value",
+            "is empty",
+            "contains data",
+        ]
+
+        # Check for exact matches of generic patterns
+        for pattern in (
+            generic_error_patterns + generic_boolean_patterns + generic_existence_patterns
+        ):
+            if text_lower == pattern:
+                return True
+
+        # Check for patterns that are generic variable/function checks
+        # Pattern: "len(...) is greater than/less than ..."
+        if re.match(r"^len\([^)]+\)\s+(is|has|equals|differs)", text_lower):
+            return True
+
+        # Pattern: Generic numeric comparisons with len()
+        if re.match(r"^len\([^)]+\)\s+(greater|less|equal)", text_lower):
+            return True
+
+        # Pattern: Simple variable boolean checks (e.g., "flag is true", "ready is false")
+        # But preserve domain-specific properties (e.g., "pod status is true" is NOT generic)
+        if re.match(r"^\w+\s+(is true|is false)$", text_lower):
+            # Allow if it contains domain keywords (preserve these)
+            domain_keywords = [
+                "status",
+                "state",
+                "ready",
+                "available",
+                "healthy",
+                "running",
+                "pod",
+                "node",
+                "cluster",
+                "operator",
+                "service",
+            ]
+            if not any(keyword in text_lower for keyword in domain_keywords):
+                return True
+
+        # Pattern: Generic variable existence checks without domain context
+        if re.match(r"^\w+\s+(is nil|exists|is zero)$", text_lower):
+            return True
+
+        return False
+
+    @staticmethod
+    def _filter_generic_assertions(steps: List[str]) -> List[str]:
+        """
+        Filter generic assertion boilerplate from a list of steps.
+
+        This removes code-level implementation details like "operation succeeds without error"
+        while preserving domain-specific validations like "SR-IOV operator is ready".
+        """
+        return [step for step in steps if not TestSimilarityAnalyzer._is_generic_assertion(step)]
+
     def _create_combined_text(self, context: TestContext) -> str:
         """Create combined text for embedding with hierarchical context"""
         parts = []
@@ -359,10 +450,11 @@ class MarkdownSimilarityAnalyzer:
         # Add test description (most important)
         parts.append(f"Test: {context.test_description}")
 
-        # Add preparation context
+        # Add preparation context (filter generic assertions)
         all_prep = context.preparation_steps + context.test_prep_steps
-        if all_prep:
-            prep_text = " | ".join(all_prep)
+        filtered_prep = self._filter_generic_assertions(all_prep)
+        if filtered_prep:
+            prep_text = " | ".join(filtered_prep)
             parts.append(f"Prerequisites: {prep_text}")
 
         # Add skip conditions (important for semantic matching)

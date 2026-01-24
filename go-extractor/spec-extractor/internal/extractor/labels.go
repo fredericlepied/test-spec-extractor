@@ -16,8 +16,17 @@ func extractLabels(r *Recognizer, cr *ConstantResolver, call *ast.CallExpr) []st
 		}
 		for _, la := range nested.Args {
 			// Use constant resolver to handle both literals and constant references
-			if value := cr.Resolve(la); value != "" {
-				labels = append(labels, value)
+			// First try to extract as string literal
+			if lit, ok := la.(*ast.BasicLit); ok {
+				value := unquote(lit.Value)
+				if value != "" {
+					labels = append(labels, value)
+				}
+			} else if ident, ok := la.(*ast.Ident); ok {
+				// Try to resolve as constant
+				if value, found := cr.Resolve(ident.Name); found && value != "" {
+					labels = append(labels, value)
+				}
 			}
 		}
 	}

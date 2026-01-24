@@ -1,5 +1,16 @@
 # AI Coding Assistent Rules for Test Spec Extractor
 
+## Continuous Improvement
+
+**Always** review this document at the end of the developement of a change to improve the knowledge and practices.
+
+## Design Principles
+
+- TDD methodology
+- Use the DRY principle
+- don't create new Markdown files without asking the user
+- keep the minimal documentation needed not an exhaustive one
+
 ## Code Formatting
 
 ### Python Code
@@ -199,3 +210,150 @@ Based on extraction from 4 repositories:
 - **Frequent labels (10+ uses)**: Only 9 (3.1%)
 
 See `analyze_labels.py` for label extraction and `spec-md/label_analysis.json` for full frequency data.
+
+## Cross-Repository Similarity Optimization
+
+### Generic Assertion Filtering (Python)
+
+**Problem**: Code-level implementation details pollute semantic embeddings, reducing similarity scores between functionally identical tests.
+
+**Solution**: Pattern-based filtering at the embedding layer (not extraction layer).
+
+**Implementation**:
+- **File**: `markdown-similarity.py`
+- **Functions**: `_is_generic_assertion()`, `_filter_generic_assertions()`
+- **Location**: Applied in `_create_combined_text()` when creating embeddings
+- **Principle**: Preserve raw data in JSONL, filter only for similarity matching
+
+**Filtered Patterns** (generic noise):
+```python
+# Error handling
+"operation succeeds without error"
+"returns an error"
+
+# Boolean checks (simple variables only)
+"is true", "is false"
+
+# Existence checks
+"is nil", "exists", "is zero"
+
+# Generic len() comparisons
+"len(...) is greater than ..."
+"len(...) has length ..."
+```
+
+**Preserved Patterns** (domain-specific signal):
+```python
+# Domain keyword protection list
+domain_keywords = [
+    "status", "state", "ready", "available", "healthy",
+    "running", "pod", "node", "cluster", "operator", "service"
+]
+
+# Examples that are preserved:
+"SR-IOV operator is ready"           # Has 'operator'
+"pod status equals Running"          # Has 'pod', 'status'
+"cluster ready is true"              # Has 'cluster', 'ready'
+"Deploy SR-IOV operator"             # Specific action
+```
+
+**Key Principles**:
+1. **Filter at the right layer**: Keep raw data intact, filter only for embeddings
+2. **Conservative filtering**: Only remove obvious generic patterns
+3. **Domain awareness**: Preserve anything with domain-specific keywords
+4. **Pattern-based**: Use regex patterns, not hardcoded test suite names
+5. **Testable**: Unit tests validate filtering logic (see `test_filtering.py`)
+
+**Results**:
+- 75 high-similarity matches (>0.90) between cnf-gotests ↔ eco-gotests
+- Top matches >0.96 similarity (near-perfect duplicates)
+- 27.4% of cross-repo matches are high-quality (>0.90)
+
+### Custom Test Framework Wrapper Recognition (Go)
+
+**Problem**: Test suites use custom wrapper functions (e.g., `compat_otp.By()`) that the extractor doesn't recognize, causing identical tests to have different extractions.
+
+**Solution**: Generic AST pattern matching for any `package.Method()` pattern, not just known aliases.
+
+**Implementation**:
+- **File**: `go-extractor/spec-extractor/internal/extractor/visit.go`
+- **Function**: `isCustomByCall()` (lines 222-248)
+- **Integration**: `v.recog.IsBy(be) || isCustomByCall(be)` (line 148)
+
+**Pattern Matched**:
+```go
+// Detects any selector expression with method name "By" and single string argument
+sel, ok := call.Fun.(*ast.SelectorExpr)
+sel.Sel.Name == "By"
+len(call.Args) == 1
+call.Args[0] is string literal
+```
+
+**Examples Recognized**:
+- `compat_otp.By("step description")` ← Previously missed
+- `utils.By("step description")`
+- `helper.By("step description")`
+- Any `<package>.By("string")` pattern
+
+**Key Principles**:
+1. **Generic pattern matching**: Match structural patterns, not specific package names
+2. **No configuration needed**: Automatically works with any test suite
+3. **Future-proof**: Based on AST structure, not hardcoded names
+4. **Fallback approach**: Check custom patterns after standard recognition fails
+
+**Results**:
+- openshift-tests-private now extracts steps from `compat_otp.By()` calls
+- +1-3 steps per test extracted that were previously missed
+- Works with any future test suite using custom wrappers
+
+### Design Principles for Similarity Optimization
+
+**1. Preserve Raw Data, Filter for Analysis**
+- JSONL contains all extracted information (unfiltered)
+- Filtering applied only during embedding creation
+- Enables different filtering strategies without re-extraction
+
+**2. Pattern-Based Over Hardcoding**
+- Use regex patterns and structural matching
+- Avoid hardcoding specific repo names or function names
+- Makes solution generic and future-proof
+
+**3. Conservative Filtering**
+- Only remove obvious noise
+- When in doubt, preserve the data
+- Use domain keyword lists to protect important context
+
+**4. Validate with Unit Tests**
+- Test filtering logic independently (see `test_filtering.py`)
+- Validate with real-world examples from multiple repos
+- Check for false positives (unrelated tests matching)
+
+**5. Two-Layer Approach**
+- **Extraction layer** (Go): Get all available information
+- **Analysis layer** (Python): Filter for specific use cases
+- Keeps extraction generic, allows analysis flexibility
+
+### Monitoring and Maintenance
+
+**Metrics to Track**:
+- High-similarity match percentage (should stay >25%)
+- Average cross-repo similarity (should stay >0.80)
+- False positive rate (manual review of sample matches)
+
+**Pattern Expansion**:
+When new generic patterns are identified, add to `_is_generic_assertion()`:
+```python
+# New patterns to consider:
+# - "err is nil" (but preserve "pod.Err is nil")
+# - "result succeeds" (generic outcome)
+# - "count equals N" (generic numeric check)
+```
+
+**Domain Keyword Updates**:
+Add new domain keywords as test suites evolve:
+```python
+# Consider adding:
+# - "deployment", "statefulset", "daemonset" (K8s resources)
+# - "route", "ingress" (networking)
+# - "crd", "operator" (operators)
+```
