@@ -198,7 +198,7 @@
 
 - **Extractor output**: Labels included in JSONL `labels` field and markdown `- **labels**:` sections
 - **Metadata**: Labels preserved in `TestContext.container_labels` and `TestContext.test_labels`
-- **Embeddings**: Labels excluded in `markdown-similarity.py::_create_combined_text()` (lines 366-371)
+- **Embeddings**: Labels excluded in `match/markdown-similarity.py::_create_combined_text()` (lines 366-371)
 
 ### Analysis Results
 
@@ -220,7 +220,7 @@ See `analyze_labels.py` for label extraction and `spec-md/label_analysis.json` f
 **Solution**: Pattern-based filtering at the embedding layer (not extraction layer).
 
 **Implementation**:
-- **File**: `markdown-similarity.py`
+- **File**: `match/markdown-similarity.py`
 - **Functions**: `_is_generic_assertion()`, `_filter_generic_assertions()`
 - **Location**: Applied in `_create_combined_text()` when creating embeddings
 - **Principle**: Preserve raw data in JSONL, filter only for similarity matching

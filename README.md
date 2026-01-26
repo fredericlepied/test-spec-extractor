@@ -37,26 +37,27 @@ A sophisticated toolkit that extracts KubeSpecs from Go and Python test files, b
 ### **Automated Pipeline (Recommended)**
 
 ```bash
-# Single repositories
-./extract-and-match.sh -g /path/to/eco-gotests -p /path/to/eco-pytests
+# Single Go repository
+./extract-spec-md.sh -g /path/to/eco-gotests
 
-# Multiple repositories
-./extract-and-match.sh -g /path/to/eco-gotests -g /path/to/openshift-tests -p /path/to/eco-pytests
+# Multiple Go repositories
+./extract-spec-md.sh -g /path/to/eco-gotests -g /path/to/openshift-tests -g /path/to/cnf-gotests
+
+# With Python repository
+./extract-spec-md.sh -g /path/to/eco-gotests -p /path/to/eco-pytests
 
 # Custom output directory
-./extract-and-match.sh -g /path/to/go-tests -p /path/to/py-tests --output-dir my_results
+./extract-spec-md.sh -g /path/to/go-tests -o my_analysis
 ```
 
 ### **What You Get**
 
 The pipeline generates:
-- `test_report.csv`: Comprehensive similarity matches (Go↔Go, Python↔Python, Go↔Python) with scores and shared operations
-- `test_coverage.csv`: Coverage matrix of operations across all test suites
-- `go_specs.jsonl` / `py_specs.jsonl`: Raw extracted test specifications
-- `*_analysis.json`: Individual test suite analyses (one per repository)
-- `*_report.md`: High-level reports for test suite owners (one per repository)
-- `similarity_report.md`: Comprehensive similarity analysis report with match type distribution
-- `all_suite_comparisons.json`: Comprehensive cross-suite comparisons
+- `markdown_similarity_results.csv`: Comprehensive similarity matches (Go↔Go, Python↔Python, Go↔Python) with scores and shared operations
+- `similarity_analysis.md`: Comprehensive similarity analysis report with match type distribution, executive summary, and strategic recommendations
+- `go_specs_per_it.jsonl` / `py_specs_per_it.jsonl` / `all_specs_per_it.jsonl`: Per-test extracted specifications
+- `markdown/`: Directory containing markdown documentation for each test file
+- Repository symlinks for easy navigation to source files
 
 ## 🔍 New Analysis Capabilities
 
@@ -82,7 +83,7 @@ The tool now performs comprehensive similarity analysis across all test language
 
 ## 📊 Analyzing Results
 
-### **Understanding the Test Report (`test_report.csv`)**
+### **Understanding the Test Report (`markdown_similarity_results.csv`)**
 
 The test report contains comprehensive similarity matches across all languages with detailed scoring:
 
@@ -113,73 +114,37 @@ idx_a,idx_b,a_test,b_test,a_language,b_language,a_repo,b_repo,base_score,blended
 
 ```bash
 # View top matches by blended score
-sort -t',' -k4 -nr test_report.csv | head -10
+sort -t',' -k4 -nr markdown_similarity_results.csv | head -10
 
 # Find matches with exact operations
-grep "exact:" test_report.csv
+grep "exact:" markdown_similarity_results.csv
 
 # Count matches by shared signal type
-cut -d',' -f7 test_report.csv | tr ';' '\n' | cut -d':' -f1 | sort | uniq -c
+cut -d',' -f7 markdown_similarity_results.csv | tr ';' '\n' | cut -d':' -f1 | sort | uniq -c
 
 # Filter by specific test
-grep "test_function_name" test_report.csv
+grep "test_function_name" markdown_similarity_results.csv
 
 # Analyze match types
-cut -d',' -f12 test_report.csv | sort | uniq -c
+cut -d',' -f12 markdown_similarity_results.csv | sort | uniq -c
 
 # Find intra-language duplicates (same language)
-grep -E "(go->go|py->py)" test_report.csv
+grep -E "(go->go|py->py)" markdown_similarity_results.csv
 
 # Find cross-language opportunities
-grep -E "(py->go|go->py)" test_report.csv
+grep -E "(py->go|go->py)" markdown_similarity_results.csv
 ```
 
-### **Understanding the Coverage Matrix (`test_coverage.csv`)**
+### **Understanding the Similarity Analysis Report (`similarity_analysis.md`)**
 
-The coverage matrix shows which operations are tested across different test suites:
-
-```csv
-operation,go_count,py_count,total_count,coverage_ratio
-v1/Pod:get,45,23,68,0.68
-v1/Namespace:create,32,15,47,0.47
-```
-
-**Column Descriptions:**
-
-- `operation`: Kubernetes operation (GVK:verb format)
-- `go_count`: Number of Go tests using this operation
-- `py_count`: Number of Python tests using this operation
-- `total_count`: Total unique tests using this operation
-- `coverage_ratio`: Ratio of tests using this operation
-
-**How to Analyze:**
-
-```bash
-# Find most common operations
-sort -t',' -k4 -nr test_coverage.csv | head -10
-
-# Find operations only tested in Go
-awk -F',' '$3==0 {print $0}' test_coverage.csv
-
-# Find operations only tested in Python
-awk -F',' '$2==0 {print $0}' test_coverage.csv
-
-# Find operations with high coverage
-awk -F',' '$5>0.5 {print $0}' test_coverage.csv
-```
-
-### **Understanding the Similarity Report (`similarity_report.md`)**
-
-The similarity report provides comprehensive analysis of all test relationships:
-
-**Key Sections:**
+The similarity analysis report provides a comprehensive analysis of test relationships and includes:
 
 - **Executive Summary**: Overview of matches, quality indicators, and duplicate ratios
-- **Match Type Analysis**: Distribution of intra-language vs cross-language matches
+- **Match Type Analysis**: Distribution of Go↔Go, Python↔Python, and cross-language matches
 - **Score Distribution**: Visual analysis of similarity score patterns
-- **Shared Signals Analysis**: Breakdown of different signal types
-- **Potential Duplicates**: High-similarity matches (≥0.95) with consolidation recommendations
-- **Complementary Tests**: Medium-similarity matches (0.6-0.8) with different purposes
+- **Shared Signals Analysis**: Breakdown of exact operations, resource matches, and category matches
+- **Potential Duplicates**: High-similarity tests (≥0.95) with consolidation recommendations
+- **Complementary Tests**: Medium-similarity tests (0.6-0.8) with different purposes
 - **Top Similarity Matches**: Most similar test pairs with detailed analysis
 - **Strategic Recommendations**: Actionable insights for test optimization
 
@@ -187,17 +152,18 @@ The similarity report provides comprehensive analysis of all test relationships:
 
 ```bash
 # View the full report
-cat similarity_report.md
+cat similarity_analysis.md
 
 # Find duplicate recommendations
-grep -A 5 "Potential Duplicates" similarity_report.md
+grep -A 5 "Potential Duplicates" similarity_analysis.md
 
 # Check match type distribution
-grep -A 10 "Match Type Distribution" similarity_report.md
+grep -A 10 "Match Type Distribution" similarity_analysis.md
 
 # Review strategic recommendations
-grep -A 20 "Strategic Recommendations" similarity_report.md
+grep -A 20 "Strategic Recommendations" similarity_analysis.md
 ```
+
 
 ### **Understanding the Spec Files (`*_specs.jsonl`)**
 
@@ -259,26 +225,26 @@ echo "Python test types:"; jq -r '.test_type' py_specs.jsonl | sort | uniq -c
 
    ```bash
    # Look for exact operation matches (highest quality)
-   grep "exact:" test_report.csv | head -5
-   
+   grep "exact:" markdown_similarity_results.csv | head -5
+
    # Check purpose compatibility
-   awk -F',' 'NR>1 {print $5, $6}' test_report.csv | head -10
+   awk -F',' 'NR>1 {print $5, $6}' markdown_similarity_results.csv | head -10
    ```
 
-2. **Identify Coverage Gaps:**
+2. **Review Similarity Analysis:**
 
    ```bash
-   # Find operations with low coverage
-   awk -F',' '$5<0.3 {print $0}' test_coverage.csv
-   
-   # Find operations only in one language
-   awk -F',' '$2==0 || $3==0 {print $0}' test_coverage.csv
+   # View comprehensive analysis report
+   cat similarity_analysis.md
+
+   # Check for high-similarity duplicates
+   grep -A 10 "Potential Duplicates" similarity_analysis.md
    ```
 
 3. **Validate Similarity:**
    ```bash
    # Get details of top matches
-   head -5 test_report.csv | while IFS=',' read -r idx_a idx_b base_score blended_score a_test b_test shared_signals; do
+   head -5 markdown_similarity_results.csv | while IFS=',' read -r idx_a idx_b base_score blended_score a_test b_test shared_signals; do
      echo "Match: $a_test ↔ $b_test"
      echo "Score: $blended_score"
      echo "Shared: $shared_signals"
@@ -292,7 +258,7 @@ echo "Python test types:"; jq -r '.test_type' py_specs.jsonl | sort | uniq -c
 
 ```bash
 # Extract test pairs with their details
-awk -F',' 'NR>1 {print $5, $6, $4, $7}' test_report.csv | head -10
+awk -F',' 'NR>1 {print $5, $6, $4, $7}' markdown_similarity_results.csv | head -10
 ```
 
 **Analyze Purpose Distribution:**
@@ -315,206 +281,35 @@ jq -r 'select(.actions[].verb == "create") | .test_id' go_specs.jsonl
 jq -r 'select(.expectations[].target == "resource_status") | .test_id' py_specs.jsonl
 ```
 
-## 🔍 Test Suite Analysis
+## 📊 Understanding Markdown Documentation
 
-### **Understanding Suite Analysis Files**
+The `markdown/` directory contains auto-generated documentation for each test file, organized by repository:
 
-The pipeline automatically generates comprehensive analyses for each individual test suite (repository):
-
-#### **Individual Suite Analysis (`*_analysis.json`)**
-
-Each analysis provides detailed insights into a specific test suite:
-
-```json
-{
-  "suite_name": "Go Tests",
-  "total_tests": 1086,
-  "coverage_metrics": {
-    "unique_operations": 909,
-    "unique_resources": 184,
-    "avg_operations_per_test": 5.9
-  },
-  "test_distribution": {
-    "by_type": {"integration": 756, "unit": 197, "conformance": 133},
-    "by_purpose": {"POD_MANAGEMENT": 422, "RESOURCE_VALIDATION": 261},
-    "by_environment": {"multi_node": 334, "cloud": 10}
-  },
-  "key_insights": [
-    "Primary test type: integration (756 tests, 69.6%)",
-    "Main focus: POD_MANAGEMENT (422 tests, 38.9%)",
-    "Most tested resources: meta/v1/GetOptions (728), v1/Pod (337)"
-  ]
-}
+```
+spec-md/
+├── eco-gotests/          # Go test repository
+│   ├── tests/
+│   │   └── cnf/
+│   │       └── ran/
+│   │           └── ptp/
+│   │               └── ptp_suite_test.md
+├── eco-pytests/          # Python test repository
+│   └── src/
+│       └── eco_pytests/
+│           └── du/
+│               └── deployment/
+│                   └── test_sriov.md
+└── symlinks/             # Easy access to source repos
+    ├── eco-gotests -> /path/to/eco-gotests
+    └── eco-pytests -> /path/to/eco-pytests
 ```
 
-#### **Cross-Suite Comparison (`all_suite_comparisons.json`)**
-
-Identifies gaps and differences between all test suites:
-
-```json
-{
-  "suite1": "Go Tests",
-  "suite2": "Python Tests",
-  "test_count_diff": 975,
-  "operation_gaps": {
-    "unique_to_suite1": ["v1/Pod:create", "v1/Namespace:delete"],
-    "unique_to_suite2": ["hive.openshift.io/v1/ClusterDeployment:get"],
-    "common": ["v1/Pod:get", "v1/Namespace:get"]
-  },
-  "recommendations": [
-    "Consider adding 907 operations from Go Tests to Python Tests",
-    "Consider adding tests for 182 resource types from Go Tests to Python Tests"
-  ]
-}
-```
-
-### **Analyzing Suite Characteristics**
-
-**Test Type Distribution:**
-```bash
-# View test type breakdown for a specific suite
-jq '.test_distribution.by_type' eco-gotests_analysis.json
-
-# Compare test types between all suites
-for file in *_analysis.json; do
-  echo "=== $(basename $file _analysis.json) ==="
-  jq '.test_distribution.by_type' "$file"
-done
-```
-
-**Purpose Analysis:**
-```bash
-# Find most common purposes for a specific suite
-jq '.test_distribution.by_purpose' eco-gotests_analysis.json
-
-# Identify purpose gaps between all suites
-jq '.purpose_gaps' all_suite_comparisons.json
-```
-
-**Resource Coverage:**
-```bash
-# Top resources by usage for a specific suite
-jq '.resources | to_entries | sort_by(.value) | reverse | .[0:10]' eco-gotests_analysis.json
-
-# Resource gaps between all suites
-jq '.resource_gaps' all_suite_comparisons.json
-```
-
-**Operation Analysis:**
-```bash
-# Most common operations for a specific suite
-jq '.operations | to_entries | sort_by(.value) | reverse | .[0:10]' eco-gotests_analysis.json
-
-# Operation coverage metrics for all suites
-for file in *_analysis.json; do
-  echo "=== $(basename $file _analysis.json) ==="
-  jq '.coverage_metrics' "$file"
-done
-```
-
-### **Identifying Test Suite Gaps**
-
-**Coverage Gaps:**
-```bash
-# Find operations only in one suite
-jq '.operation_gaps.unique_to_suite1 | length' all_suite_comparisons.json
-jq '.operation_gaps.unique_to_suite2 | length' all_suite_comparisons.json
-
-# Find resource gaps between all suites
-jq '.resource_gaps.unique_to_suite1 | length' all_suite_comparisons.json
-jq '.resource_gaps.unique_to_suite2 | length' all_suite_comparisons.json
-```
-
-**Purpose Gaps:**
-```bash
-# Find missing purpose categories
-jq '.purpose_gaps' all_suite_comparisons.json
-
-# Compare purpose distribution across all suites
-for file in *_analysis.json; do
-  echo "=== $(basename $file _analysis.json) ==="
-  jq '.test_distribution.by_purpose' "$file"
-done
-```
-
-**Environment Gaps:**
-```bash
-# Find environment differences
-jq '.environment_gaps' all_suite_comparisons.json
-
-# Compare environment coverage across all suites
-for file in *_analysis.json; do
-  echo "=== $(basename $file _analysis.json) ==="
-  jq '.test_distribution.by_environment' "$file"
-done
-```
-
-### **Using Analysis for Test Planning**
-
-**Identify Missing Coverage:**
-```bash
-# Find operations with low coverage for a specific suite
-jq '.operations | to_entries | map(select(.value < 5)) | sort_by(.value)' eco-gotests_analysis.json
-
-# Find untested resource types across all suites
-for file in *_analysis.json; do
-  echo "=== $(basename $file _analysis.json) ==="
-  jq '.resources | to_entries | map(select(.value == 1)) | length' "$file"
-done
-```
-
-**Plan Cross-Language Testing:**
-```bash
-# Get recommendations for improving coverage
-jq '.recommendations' all_suite_comparisons.json
-
-# Find common operations to prioritize
-jq '.operation_gaps.common | length' all_suite_comparisons.json
-```
-
-**Quality Assessment:**
-```bash
-# Check test diversity across all suites
-for file in *_analysis.json; do
-  echo "=== $(basename $file _analysis.json) ==="
-  jq '.coverage_metrics | {test_type_diversity, purpose_diversity, avg_operations_per_test}' "$file"
-done
-```
-
-### **Manual Suite Analysis**
-
-You can also run the analyzer independently:
-
-```bash
-# Analyze individual suites
-python match/analyze_test_suites.py --go go_specs.jsonl --output analysis/
-python match/analyze_test_suites.py --py py_specs.jsonl --output analysis/
-
-# Compare all suites
-python match/analyze_test_suites.py --go go_specs.jsonl --py py_specs.jsonl --compare --output analysis/
-```
-
-### **Generating High-Level Reports**
-
-Generate human-readable reports for test suite owners:
-
-```bash
-# Generate report for a specific suite
-python match/generate_suite_report.py eco-gotests_analysis.json -o eco-gotests_report.md
-
-# Generate reports for all suites
-for file in *_analysis.json; do
-    suite_name=$(basename "$file" _analysis.json)
-    python match/generate_suite_report.py "$file" -o "${suite_name}_report.md"
-done
-```
-
-**Report Contents:**
-- **Executive Summary**: Test counts, types, purposes, and environments
-- **Coverage Analysis**: Most tested resources and operations
-- **Quality Metrics**: Test diversity and complexity analysis
-- **Key Insights & Recommendations**: Automated analysis and suggestions
-- **Validation Questions**: Specific questions for test suite owners to validate accuracy
+Each markdown file contains:
+- **Container hierarchy** (Describe/Context/When blocks)
+- **Test cases** (It blocks) with descriptions
+- **Test steps** (By(...) calls) with line numbers
+- **Setup/Teardown** (BeforeEach/AfterEach)
+- **Parametrized tests** (Entry blocks)
 
 ## 📊 Purpose Categories
 
@@ -692,253 +487,6 @@ var _ = Describe("Pod Management", func() {
    - Compatible purposes, meaningful similarity
 ```
 
-## 🔍 Test Spec Inspection Tool
-
-### **Overview**
-
-The inspection tool provides complete visibility into the test specification extraction pipeline, allowing you to see exactly how source code is transformed into vector database representations. This is essential for debugging extraction issues, understanding similarity matching, and validating the quality of test specifications.
-
-### **Usage**
-
-```bash
-# Inspect a Python test file
-python inspect_test_specs.py \
-    --file ~/external/eco-pytests/src/eco_pytests/du/deployment/test_sriov.py \
-    --output inspection_output/test_sriov/
-
-# Inspect a Go test file  
-python inspect_test_specs.py \
-    --file ~/external/eco-gotests/tests/cnf/ran/ptp/ptp_suite_test.go \
-    --output inspection_output/ptp_suite/
-
-# Inspect any test file (auto-detects language)
-python inspect_test_specs.py \
-    --file /path/to/any/test_file.py \
-    --output inspection_output/
-```
-
-### **Output Structure**
-
-The inspection tool generates a complete analysis directory:
-
-```
-inspection_output/test_sriov/
-├── specs.jsonl                    # Raw extracted specs (JSON format)
-├── text_representations/          # Text sent to vector database
-│   ├── test_sriov_interfaces_exist.txt
-│   ├── test_sriov_operator_ready.txt
-│   └── test_sriov_pods_status.txt
-├── index.json                     # Metadata (test_id → files mapping)
-└── summary.md                     # Human-readable summary
-```
-
-### **Vector Database Pipeline**
-
-The inspection tool shows the complete pipeline from source code to vector database:
-
-```
-Source Code → JSON Specs → Text Representation → Embeddings → FAISS Index
-     ↓              ↓              ↓                ↓           ↓
-  test.py    →  specs.jsonl  →  *.txt files  →  vectors  →  similarity
-```
-
-**Why YAML-like Text Files (not JSON)?**
-- The vector database stores **embeddings** (numerical vectors), not JSON
-- The `spec_to_text()` function converts JSON specs into **YAML-like structured text**
-- SentenceTransformer encodes this structured text into embeddings
-- FAISS stores the numerical embeddings for similarity search
-- The `.txt` files show exactly what **structured text** gets encoded
-- **YAML-like format** preserves hierarchy and relationships better than JSON for embeddings
-
-### **Key Files Explained**
-
-#### **`specs.jsonl`** - Raw Extracted Specifications
-Contains the complete JSON specifications for each test, exactly as generated by the extractors:
-
-```json
-{
-  "test_id": "deployment/test_sriov.py:test_sriov_interfaces_exist",
-  "test_type": "unit",
-  "purpose": "SRIOV_TESTING",
-  "tech": ["SR-IOV"],
-  "environment": ["multi_node"],
-  "actions": [
-    {"gvk": "v1/Pod", "verb": "get", "by_step": "check sriov interfaces"}
-  ],
-  "expectations": [
-    {"target": "resource_count", "condition": "len(sriov_interfaces) > 0"}
-  ],
-  "by_steps": [
-    {
-      "description": "check sriov interfaces",
-      "actions": [{"gvk": "v1/Pod", "verb": "get"}],
-      "line": 45
-    }
-  ]
-}
-```
-
-#### **`text_representations/*.txt`** - Vector Database Input
-Shows the exact **YAML-like structured text** sent to the vector database for similarity matching. This is the **actual input** to the embedding model (SentenceTransformer) that generates the vectors stored in FAISS:
-
-```
-TEST_ID: deployment/test_sriov.py:test_sriov_interfaces_exist
-TEST_TYPE: unit
-TECHNOLOGY: SR-IOV
-PURPOSE: SRIOV_TESTING
-ENVIRONMENT: multi_node
-OPERATIONS:
-  - v1/Pod:get
-EXPECTATIONS:
-  - resource_count=len(sriov_interfaces) > 0
-STEPS:
-  - check sriov interfaces
-    - v1/Pod:get
-```
-
-#### **`index.json`** - Metadata Index
-Maps test IDs to their corresponding files and provides metadata:
-
-```json
-{
-  "source_file": "/path/to/test_sriov.py",
-  "language": "python",
-  "total_tests": 3,
-  "tests": [
-    {
-      "test_id": "deployment/test_sriov.py:test_sriov_interfaces_exist",
-      "text_file": "test_sriov_interfaces_exist.txt",
-      "purpose": "SRIOV_TESTING",
-      "tech": ["SR-IOV"],
-      "operations": ["v1/Pod:get"]
-    }
-  ]
-}
-```
-
-#### **`summary.md`** - Human-Readable Report
-Provides a comprehensive overview of the extracted tests:
-
-```markdown
-# Test Spec Inspection Report
-
-**Source File**: /path/to/test_sriov.py
-**Language**: Python
-**Total Tests Found**: 3
-
-## Tests Extracted
-
-### 1. test_sriov_interfaces_exist
-- **Purpose**: SRIOV_TESTING
-- **Technology**: SR-IOV
-- **Operations**: v1/Pod:get
-- **Text File**: text_representations/test_sriov_interfaces_exist.txt
-
-### 2. test_sriov_operator_ready
-- **Purpose**: OPERATOR_MANAGEMENT
-- **Technology**: SR-IOV
-- **Operations**: operators.coreos.com/v1alpha1/Subscription:get
-- **Text File**: text_representations/test_sriov_operator_ready.txt
-```
-
-### **Use Cases**
-
-#### **1. Debug Extraction Issues**
-```bash
-# Check if operations are correctly detected
-python inspect_test_specs.py --file problematic_test.py --output debug/
-cat debug/specs.jsonl | jq '.actions'
-```
-
-#### **2. Understand Similarity Matching**
-```bash
-# Compare text representations of similar tests
-python inspect_test_specs.py --file test_a.py --output analysis/
-python inspect_test_specs.py --file test_b.py --output analysis/
-diff analysis/test_a/text_representations/ analysis/test_b/text_representations/
-```
-
-#### **3. Validate Technology Detection**
-```bash
-# Check if SR-IOV technology is properly detected
-python inspect_test_specs.py --file sriov_test.py --output validation/
-grep -r "SR-IOV" validation/text_representations/
-```
-
-#### **4. Analyze Step Extraction**
-```bash
-# See how By(...) steps are extracted and represented
-python inspect_test_specs.py --file ginkgo_test.go --output steps/
-cat steps/specs.jsonl | jq '.by_steps'
-```
-
-#### **5. Cross-Language Comparison**
-```bash
-# Compare Go vs Python extraction for similar tests
-python inspect_test_specs.py --file go_test.go --output comparison/
-python inspect_test_specs.py --file py_test.py --output comparison/
-# Compare the text_representations/ directories
-```
-
-### **Advanced Analysis**
-
-#### **Extract Top Matches for Analysis**
-```bash
-# Get the top 5 matches from similarity results
-head -6 results/test_report.csv | tail -5 > top_matches.csv
-
-# Extract each match for detailed analysis
-while IFS=',' read -r idx_a idx_b a_test b_test; do
-  echo "Analyzing match: $a_test ↔ $b_test"
-  # Extract test A
-  python inspect_test_specs.py --file "$(echo $a_test | cut -d: -f1)" --output "match_${idx_a}_${idx_b}_a/"
-  # Extract test B  
-  python inspect_test_specs.py --file "$(echo $b_test | cut -d: -f1)" --output "match_${idx_a}_${idx_b}_b/"
-done < top_matches.csv
-```
-
-#### **Batch Analysis**
-```bash
-# Analyze multiple test files at once
-for test_file in tests/*.py; do
-  output_dir="analysis/$(basename $test_file .py)"
-  python inspect_test_specs.py --file "$test_file" --output "$output_dir"
-done
-```
-
-### **Benefits**
-
-- **🔍 Full Pipeline Visibility**: See complete transformation from source code → JSON → text representation → embeddings
-- **🐛 Debug Extraction Issues**: Verify that operations are correctly detected and categorized
-- **🎯 Debug Similarity Issues**: Compare text representations to understand why tests match or don't match
-- **✅ Technology Verification**: Confirm technology detection is working correctly
-- **📊 Step Analysis**: See how By(...) steps are extracted and represented in the final text
-- **🔄 Cross-Language Comparison**: Compare Go vs Python extraction for similar test patterns
-- **📈 Quality Assessment**: Validate the quality and completeness of test specifications
-- **🧠 Embedding Understanding**: See exactly what text gets encoded into the vector database
-
-### **Troubleshooting**
-
-#### **Common Issues**
-
-1. **"No module named 'sentence_transformers'"**
-   - The tool falls back to a simplified text representation
-   - This is normal and doesn't affect the core functionality
-
-2. **Empty specs.jsonl**
-   - Check if the test file follows expected patterns (Ginkgo for Go, pytest for Python)
-   - Verify the file path is correct and accessible
-
-3. **Missing operations in text representation**
-   - Check if the test uses supported patterns (eco-goinfra, openshift library, etc.)
-   - Verify helper functions are properly detected
-
-#### **Debug Mode**
-```bash
-# Enable verbose output for debugging
-python inspect_test_specs.py --file test.py --output debug/ 2>&1 | tee debug.log
-```
-
 ## 🛠 Manual Usage
 
 ### **1. Go Extractor**
@@ -970,30 +518,28 @@ python extract_kubespec.py --root /path/to/python/tests > ../py_specs.jsonl
 - Maps subprocess calls to API operations
 - Analyzes docstrings and test content for purpose detection
 
-### **3. Matching Engine**
+### **3. Similarity Analysis**
 
 ```bash
-cd match
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python build_index_and_match.py --go ../go_specs.jsonl --py ../py_specs.jsonl --out report.csv --cov coverage_matrix.csv
+# Run similarity analysis on markdown specs
+python match/markdown-similarity.py \
+  --go-jsonl go_specs_per_it.jsonl \
+  --py-jsonl py_specs_per_it.jsonl \
+  --output similarity_results.csv \
+  --report similarity_analysis.md
+
+# Or use the automated pipeline
+./extract-spec-md.sh -g /path/to/go-tests -p /path/to/py-tests
 ```
 
 **Features:**
 
-- Semantic embeddings using SentenceTransformers
-- FAISS-based similarity search
+- Semantic embeddings using SentenceTransformers (all-mpnet-base-v2)
+- FAISS-based similarity search with BDD-aware hierarchical context
 - Purpose-based filtering and scoring
-- Multi-level similarity detection
-- Validation and quality metrics
-
-### **4. Optional LLM Re-ranking**
-
-```bash
-export LLM_API_KEY=your_api_key
-export LLM_MODEL=gpt-4o-mini
-python build_index_and_match.py --go go_specs.jsonl --py py_specs.jsonl --out report.csv --llm
-```
+- Match type analysis (Go↔Go, Python↔Python, Python↔Go)
+- Generic assertion filtering for better cross-repository matching
+- Comprehensive markdown reports with strategic recommendations
 
 ## 📈 Performance Metrics
 
@@ -1030,9 +576,8 @@ KubeSpecs → Embeddings → Similarity Search → Purpose Filtering → Scoring
 - **`go-extractor/spec-extractor/`**: Go spec markdown extractor (generates markdown + JSONL)
 - **`py-extractor/extract_kubespec.py`**: Python AST parser with pytest/openshift support
 - **`py-extractor/spec_extractor/`**: Python spec markdown extractor (generates markdown + JSONL)
-- **`match/build_index_and_match.py`**: Semantic matching with purpose-based filtering
-- **`extract-and-match.sh`**: Automated pipeline orchestration
-- **`extract-spec-md.sh`**: Markdown spec generator with similarity analysis
+- **`match/markdown-similarity.py`**: Advanced semantic matching with BDD-aware context and purpose-based filtering
+- **`extract-spec-md.sh`**: Automated pipeline for markdown generation and similarity analysis
 
 ## 📝 Markdown Spec Extraction
 
@@ -1087,7 +632,7 @@ The project includes spec extractors that generate human-readable markdown docum
 **Structure Compatibility:**
 - Uses same Container/TestCase/TestStep data structures as Go extractor
 - Generates JSONL in same PerItRecord format
-- Compatible with `markdown-similarity.py` and `build_index_and_match.py`
+- Compatible with `match/markdown-similarity.py` for semantic analysis
 - Enables cross-language similarity matching (Go↔Python)
 
 ### **Similarity Analysis with Markdown Specs**
@@ -1119,7 +664,7 @@ You can customize purpose detection by modifying the patterns in:
 
 ### **Compatibility Matrix**
 
-Adjust purpose compatibility in `match/build_index_and_match.py`:
+Adjust purpose compatibility in `match/markdown-similarity.py`:
 ```python
 PURPOSE_COMPATIBILITY = {
     'POD_MANAGEMENT': ['POD_HEALTH', 'RESOURCE_VALIDATION'],
@@ -1196,7 +741,7 @@ idx_a,idx_b,base_score,blended_score,a_test,b_test,shared_signals
 Enable verbose output:
 
 ```bash
-./extract-and-match.sh -g /path/to/go -p /path/to/py -o debug_output 2>&1 | tee debug.log
+./extract-spec-md.sh -g /path/to/go -p /path/to/py -o debug_output 2>&1 | tee debug.log
 ```
 
 ## 🔧 Advanced Debugging Tools
@@ -1268,7 +813,7 @@ python verify_csv_match.py
 
 ### **Advanced Debugging Workflow**
 
-1. **Run Full Pipeline**: Generate initial results with `extract-and-match.sh`
+1. **Run Full Pipeline**: Generate initial results with `extract-spec-md.sh`
 2. **Identify Issues**: Look for unexpected matches or missing similarities
 3. **Use Specific Debug Tool**: Run relevant debug tool for the issue type
 4. **Analyze Output**: Review debug output to understand root cause
@@ -1278,13 +823,13 @@ python verify_csv_match.py
 **Example Debug Session:**
 ```bash
 # 1. Run pipeline
-./extract-and-match.sh -g /path/to/go -p /path/to/py
+./extract-spec-md.sh -g /path/to/go -p /path/to/py
 
 # 2. Found unexpected high-similarity match, debug filtering
 python debug_filtering.py > filtering_debug.log
 
 # 3. Check if indices are correct
-python debug_index_mapping.py > mapping_debug.log  
+python debug_index_mapping.py > mapping_debug.log
 
 # 4. Analyze shared signals for the problematic match
 python debug_shared_signals.py > signals_debug.log

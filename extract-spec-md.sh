@@ -428,7 +428,7 @@ if [[ -n "$COMBINED_JSONL" && -f "$COMBINED_JSONL" && -s "$COMBINED_JSONL" ]]; t
                 
                 # Run with both JSONL and markdown data for enhanced context
                 ALL_REPO_ROOTS=("${GO_ROOTS[@]}" "${PY_ROOTS[@]}")
-                if python markdown-similarity.py \
+                if python match/markdown-similarity.py \
                     --jsonl "$COMBINED_JSONL" \
                     --markdown "$MARKDOWN_DIR/" \
                     --output "$OUTPUT_DIR/markdown_similarity_results.csv" \
