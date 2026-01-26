@@ -447,6 +447,7 @@ if [[ -n "$COMBINED_JSONL" && -f "$COMBINED_JSONL" && -s "$COMBINED_JSONL" ]]; t
                     cat > "$OUTPUT_DIR/generate_summary.py" << 'EOF'
 import pandas as pd
 import sys
+import os
 
 def is_python_file(file_path):
     return str(file_path).endswith('.py')
@@ -555,15 +556,15 @@ def generate_summary(csv_file, output_file):
             f.write(f"\n## Potential Test Duplicates (>0.9 similarity)\n\n")
             f.write("| Test 1 | Test 2 | Similarity | Match Type | File 1 | File 2 |\n")
             f.write("|--------|--------|------------|------------|--------|--------|\n")
-            
+
             for _, row in high_similarity.head(15).iterrows():
                 f1 = row['query_file']
                 f2 = row['matched_file']
                 match_type = row.get('match_type', get_match_type(row))
-                
+
                 query_desc = str(row['query_description']) if pd.notna(row['query_description']) else "No description"
                 matched_desc = str(row['matched_description']) if pd.notna(row['matched_description']) else "No description"
-                
+
                 if query_desc == matched_desc:
                     query_id = str(row['query_test_id']) if pd.notna(row['query_test_id']) else "unknown"
                     matched_id = str(row['matched_test_id']) if pd.notna(row['matched_test_id']) else "unknown"
@@ -572,22 +573,44 @@ def generate_summary(csv_file, output_file):
                 else:
                     query_display = query_desc
                     matched_display = matched_desc
-                
+
                 query_trunc = query_display[:40] + "..." if len(query_display) > 40 else query_display
                 matched_trunc = matched_display[:40] + "..." if len(matched_display) > 40 else matched_display
-                
-                f.write(f"| {query_trunc} | {matched_trunc} | {row['semantic_similarity']:.3f} | {match_type} | {f1} | {f2} |\n")
+
+                # Convert file paths to markdown links
+                # eco-pytests/src/test.py -> markdown/eco-pytests/src/test.md
+                f1_md = os.path.splitext(f1)[0] + '.md'
+                f2_md = os.path.splitext(f2)[0] + '.md'
+                f1_link = f"[{f1}](markdown/{f1_md})"
+                f2_link = f"[{f2}](markdown/{f2_md})"
+
+                f.write(f"| {query_trunc} | {matched_trunc} | {row['semantic_similarity']:.3f} | {match_type} | {f1_link} | {f2_link} |\n")
         
         # Top Cross-Language Matches (if any)
         if len(cross_language) > 0:
             f.write(f"\n## Top Cross-Language Matches (Python↔Go)\n\n")
-            f.write("| Python Test | Go Test | Similarity |\n")
-            f.write("|-------------|---------|------------|\n")
+            f.write("| Python Test | Go Test | Similarity | Python File | Go File |\n")
+            f.write("|-------------|---------|------------|-------------|----------|\n")
             top_cross = cross_language.nlargest(10, 'semantic_similarity')
             for _, row in top_cross.iterrows():
-                py_desc = str(row['query_description'] if is_python_file(row['query_file']) else row['matched_description'])[:50]
-                go_desc = str(row['matched_description'] if is_python_file(row['query_file']) else row['query_description'])[:50]
-                f.write(f"| {py_desc}... | {go_desc}... | {row['semantic_similarity']:.3f} |\n")
+                if is_python_file(row['query_file']):
+                    py_desc = str(row['query_description'])[:40]
+                    go_desc = str(row['matched_description'])[:40]
+                    py_file = row['query_file']
+                    go_file = row['matched_file']
+                else:
+                    py_desc = str(row['matched_description'])[:40]
+                    go_desc = str(row['query_description'])[:40]
+                    py_file = row['matched_file']
+                    go_file = row['query_file']
+
+                # Create markdown links
+                py_md = os.path.splitext(py_file)[0] + '.md'
+                go_md = os.path.splitext(go_file)[0] + '.md'
+                py_link = f"[{py_file}](markdown/{py_md})"
+                go_link = f"[{go_file}](markdown/{go_md})"
+
+                f.write(f"| {py_desc}... | {go_desc}... | {row['semantic_similarity']:.3f} | {py_link} | {go_link} |\n")
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
