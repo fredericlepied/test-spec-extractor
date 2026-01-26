@@ -11,6 +11,51 @@
 - don't create new Markdown files without asking the user
 - keep the minimal documentation needed not an exhaustive one
 
+## Documentation Maintenance
+
+### README.md Guidelines
+
+**CRITICAL: Keep README.md SHORT and FOCUSED**
+
+- **Target length**: 250-300 lines maximum
+- **Current length**: 274 lines (monitor to prevent bloat)
+- **Principle**: Users want to get started quickly, not read a manual
+
+**What to INCLUDE:**
+- ✅ Brief description (1 paragraph)
+- ✅ Key features (5-7 bullet points max)
+- ✅ Quick start (installation + basic usage)
+- ✅ What you get (output files)
+- ✅ 2-3 practical examples max
+- ✅ Basic troubleshooting (common issues only)
+
+**What to EXCLUDE:**
+- ❌ Multiple bash command variations (show 1 example, not 10)
+- ❌ Deep technical explanations (save for inline code comments)
+- ❌ Exhaustive lists of all possible options
+- ❌ Detailed architecture explanations (brief overview only)
+- ❌ Every possible use case (most common 2-3 only)
+- ❌ Debug tools details (brief mention with reference)
+
+**When adding content:**
+1. Ask: "Does the user NEED this to get started?"
+2. If NO → Don't add it
+3. If YES → Can it be explained in <5 lines?
+4. If adding, remove something of equal length elsewhere
+
+**Monitoring:**
+```bash
+# Check README length regularly
+wc -l README.md
+# Should stay under 300 lines
+```
+
+**If README grows beyond 300 lines:**
+- Review and remove verbose examples
+- Consolidate redundant sections
+- Move advanced topics to inline code documentation
+- Prefer links to showing everything
+
 ## Code Formatting
 
 ### Python Code
