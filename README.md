@@ -12,12 +12,6 @@ Finds duplicate and similar tests across Go and Python test repositories using s
 
 ## 🚀 Quick Start
 
-### Install Dependencies
-
-```bash
-pip install -r match/requirements.txt
-```
-
 ### Run Analysis
 
 ```bash

@@ -61,12 +61,22 @@ func ParseTestDescription(desc string) ParsedTestDescription {
 	}
 
 	// Extract test ID from format like "[test_id:12345]" or "(test_id:12345)"
+	// This pattern takes precedence over Author pattern
 	testIDPattern := regexp.MustCompile(`[\[\(]test_id:([^\]\)]+)[\]\)]`)
 	if matches := testIDPattern.FindStringSubmatch(desc); len(matches) > 1 {
 		result.TestID = strings.TrimSpace(matches[1])
 		// Remove the test ID from description
 		result.Description = testIDPattern.ReplaceAllString(desc, "")
 		result.Description = strings.TrimSpace(result.Description)
+	} else {
+		// If no explicit test_id found, try Author pattern: Author:username-Priority-POLARIONID-description
+		// Example: "Author:bandrade-High-24061-have imagePullPolicy:IfNotPresent on thier deployments"
+		// Also handles prefixes like "ConnectedOnly-Author:..."
+		authorPattern := regexp.MustCompile(`Author:[^-]+-[^-]+-(\d+)-`)
+		if matches := authorPattern.FindStringSubmatch(desc); len(matches) > 1 {
+			result.TestID = strings.TrimSpace(matches[1])
+			// Keep the full description including the Author prefix for context
+		}
 	}
 
 	// Extract labels from format like "[label1][label2]"

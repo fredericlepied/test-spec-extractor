@@ -402,3 +402,153 @@ Add new domain keywords as test suites evolve:
 # - "route", "ingress" (networking)
 # - "crd", "operator" (operators)
 ```
+
+## Polarion Test ID Extraction
+
+### Overview
+
+Polarion test IDs link test cases to their tracking items in Polarion WorkItem system. The extractor supports **two different patterns** used across OpenShift test repositories.
+
+**Total Extraction**: 2,281 polarion links across all repositories
+
+### Pattern 1: Decorator Pattern (885 test IDs)
+
+**Used in**: cnf-gotests, eco-gotests
+
+**Format**: Test ID passed as a decorator argument to `It()` between the description and the function literal.
+
+```go
+It("test description", polarion.ID("37056"), func() {
+    // test body
+})
+
+// Also supports reportxml.ID():
+It("deploy operator", reportxml.ID("48452"), func() {
+    // test body
+})
+```
+
+**Implementation**:
+- **File**: `go-extractor/spec-extractor/internal/extractor/testid.go`
+- **Function**: `extractTestID()` (lines 14-62)
+- **Logic**: Checks `It()` call arguments BEFORE searching function body
+  1. Iterate through `call.Args`
+  2. Skip string literals (description) and function literals (test body)
+  3. Check remaining args for `polarion.ID()` or `reportxml.ID()` call expressions
+  4. Extract ID from first argument of ID call
+
+**Output**:
+```json
+{"desc": "from the same policy", "test_id": "37056"}
+```
+
+```markdown
+- **Test**: from the same policy
+  - test_id: [OCP-37056](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-37056)
+```
+
+### Pattern 2: Author Pattern (1,396 test IDs)
+
+**Used in**: openshift-tests, openshift-tests-private
+
+**Format**: Test ID embedded in the test description string using `Author:username-Priority-POLARIONID-description` format.
+
+```go
+It("Author:bandrade-High-24061-have imagePullPolicy:IfNotPresent on thier deployments", func() {
+    // test body
+})
+
+// Also handles prefixes:
+It("ConnectedOnly-Author:jiazha-Critical-23440-can subscribe to the etcd operator", func() {
+    // test body
+})
+```
+
+**Implementation**:
+- **File**: `go-extractor/spec-extractor/internal/extractor/constants.go`
+- **Function**: `ParseTestDescription()` (lines 56-96)
+- **Regex Pattern**: `Author:[^-]+-[^-]+-(\d+)-`
+  - Matches: `Author:` + username + `-` + priority + `-` + **digits** + `-`
+  - Captures the numeric ID (3rd field)
+
+**Priority**: Explicit `[test_id:12345]` pattern takes precedence over Author pattern if both are present.
+
+**Output**:
+```json
+{"desc": "Author:bandrade-High-24061-have imagePullPolicy:IfNotPresent...", "test_id": "24061"}
+```
+
+```markdown
+- **Test**: Author:bandrade-High-24061-have imagePullPolicy:IfNotPresent on thier deployments
+  - test_id: [OCP-24061](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-24061)
+```
+
+### Polarion Link Format
+
+All numeric test IDs are prefixed with `OCP-` and linked to Polarion:
+
+```markdown
+[OCP-{ID}](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-{ID})
+```
+
+**Implementation**:
+- **File**: `go-extractor/spec-extractor/internal/extractor/markdown.go`
+- **Lines**: 177-191
+- **Logic**:
+  - Numeric IDs (e.g., "37056") → Add `OCP-` prefix → `OCP-37056`
+  - Alphanumeric IDs (e.g., "C00113") → Use as-is
+
+### Troubleshooting: If Test IDs Disappear
+
+**Symptoms**: Markdown files missing `test_id:` lines or JSONL missing `test_id` field
+
+**Check these files**:
+
+1. **Decorator Pattern Extraction** (`go-extractor/spec-extractor/internal/extractor/testid.go:14-51`)
+   - Verify `extractTestID()` checks `It()` call arguments FIRST
+   - Should iterate through `call.Args` looking for `polarion.ID()` or `reportxml.ID()`
+   - Must happen BEFORE searching function body
+
+2. **Author Pattern Extraction** (`go-extractor/spec-extractor/internal/extractor/constants.go:56-96`)
+   - Verify `ParseTestDescription()` includes Author pattern regex
+   - Pattern should be: `Author:[^-]+-[^-]+-(\d+)-`
+   - Should run AFTER checking for explicit `[test_id:]` pattern
+
+3. **JSONL Export** (`go-extractor/spec-extractor/internal/extractor/jsonl.go:46-49`)
+   - Verify `WritePerItJSONL()` includes `test_id` field
+   - Check: `if tc.TestID != "" { rec.TestID = tc.TestID }`
+
+4. **Markdown Rendering** (`go-extractor/spec-extractor/internal/extractor/markdown.go:176-191`)
+   - Verify polarion link generation for `tc.TestID`
+   - Check URL format and OCP- prefix logic
+
+**Verification Commands**:
+
+```bash
+# Count extracted test IDs
+jq -r 'select(.test_id) | .test_id' spec-md/go_specs_per_it.jsonl | wc -l
+# Should be: ~2,281
+
+# Check decorator pattern (cnf-gotests)
+jq -r 'select(.file_path | contains("cnf-gotests")) | select(.test_id) | .test_id' spec-md/go_specs_per_it.jsonl | head -5
+
+# Check Author pattern (openshift-tests)
+jq -r 'select(.desc | contains("Author:")) | select(.test_id) | {desc, test_id}' spec-md/go_specs_per_it.jsonl | head -5
+
+# Count polarion links in markdown
+grep -r "polarion.engineering.redhat.com" spec-md/markdown/ | wc -l
+# Should be: ~2,281
+```
+
+### Key Implementation Points
+
+1. **Order Matters**: Decorator pattern must check `It()` arguments BEFORE function body
+2. **Priority Matters**: Explicit `[test_id:]` takes precedence over Author pattern
+3. **Two Layers**:
+   - Extraction (Go): `extractTestID()` and `ParseTestDescription()`
+   - Output (Go): JSONL export and markdown rendering
+4. **Preserve Full Description**: Author pattern keeps full description including `Author:` prefix for context
+
+### Historical Context
+
+**2026-01-29**: Initial decorator pattern only checked inside function body, missing `polarion.ID("123")` arguments to `It()`. Fixed by checking `call.Args` first. Author pattern added to support openshift-tests format, increasing coverage from 885 to 2,281 test IDs.
