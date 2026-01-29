@@ -9,6 +9,7 @@ type TestStep struct {
 type TestCase struct {
 	Description    string
 	TestID         string // Test ID from reportxml.ID("12345")
+	LineNumber     int    // Line number where the test starts in source file
 	Labels         []string
 	PrepSteps      []TestStep // Individual test prerequisites
 	SkipConditions []TestStep // Skip conditions (rendered as "Skip if" section)

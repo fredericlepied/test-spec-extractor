@@ -552,3 +552,283 @@ grep -r "polarion.engineering.redhat.com" spec-md/markdown/ | wc -l
 ### Historical Context
 
 **2026-01-29**: Initial decorator pattern only checked inside function body, missing `polarion.ID("123")` arguments to `It()`. Fixed by checking `call.Args` first. Author pattern added to support openshift-tests format, increasing coverage from 885 to 2,281 test IDs.
+
+## Source Line Numbers and GitHub Links
+
+### Overview
+
+Each test includes its source file line number and a clickable GitHub/GitLab link to the exact source code location. This enables:
+- Quick navigation from markdown specs to source code
+- Code review and verification
+- Debugging and issue investigation
+
+**Key Principle**: Line numbers are captured for traceability but **excluded from similarity embeddings** to prevent false differences between identical tests at different locations.
+
+### Implementation
+
+#### 1. Line Number Extraction (Go Extractor)
+
+**File**: `go-extractor/spec-extractor/internal/extractor/types.go`
+- Added `LineNumber int` field to `TestCase` struct
+
+**File**: `go-extractor/spec-extractor/internal/extractor/visit.go`
+- Extract line number from AST: `v.fset.Position(call.Pos()).Line`
+- Pass fileset to visitor for position resolution
+
+**Example AST Usage**:
+```go
+tc := TestCase{
+    Description: parsed.Description,
+    LineNumber:  v.fset.Position(call.Pos()).Line,  // Extract from AST
+}
+```
+
+#### 2. GitHub Link Generation (Go Extractor)
+
+**File**: `go-extractor/spec-extractor/internal/extractor/markdown.go`
+
+**Dynamic Git Detection**: Repository URLs and branches are **read from disk** using git commands, not hardcoded.
+
+**Key Functions**:
+- `getGitRepoInfo(repoPath string)`: Retrieves git remote URL and default branch
+- `parseGitURL(remoteURL, branch string)`: Converts git URLs to web-browsable URLs
+- `findGitRepoRoot(filePath string)`: Walks up directory tree to find .git directory
+- `makeGitHubURL(filePath, lineNumber)`: Generates final source link with line anchor
+
+**Git Detection Process**:
+1. Find git repository root from file path
+2. Execute `git remote get-url origin` to get remote URL
+3. Execute `git symbolic-ref refs/remotes/origin/HEAD` to get default branch
+4. Parse git URL (supports SSH and HTTPS formats)
+5. Detect GitHub vs GitLab from hostname
+6. Cache results to avoid repeated git calls
+
+**Supported URL Formats**:
+```go
+// SSH format
+"git@github.com:org/repo.git"           → "https://github.com/org/repo/blob/main"
+"git@gitlab.cee.redhat.com:org/repo.git" → "https://gitlab.cee.redhat.com/org/repo/-/blob/master"
+
+// HTTPS format
+"https://github.com/org/repo.git"       → "https://github.com/org/repo/blob/main"
+"https://gitlab.cee.redhat.com/org/repo" → "https://gitlab.cee.redhat.com/org/repo/-/blob/master"
+```
+
+**Platform Detection**:
+- GitHub: Uses `/blob/` path separator
+- GitLab: Uses `/-/blob/` path separator (auto-detected from hostname)
+
+**Real-World Examples**:
+
+CNF-GOTESTS (GitLab, master branch):
+```markdown
+- **Test**: same node
+  - test_id: [OCP-53792](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-53792)
+  - source: [system-metallb.go:184](https://gitlab.cee.redhat.com/cnf/cnf-gotests/-/blob/master/test/network/metallb/tests/system-metallb.go#L184)
+```
+
+ECO-GOTESTS (GitHub, main branch):
+```markdown
+- **Test**: Check pods state
+  - test_id: [OCP-54548](https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=OCP-54548)
+  - source: [features-test.go:88](https://github.com/rh-ecosystem-edge/eco-gotests/blob/main/tests/hw-accel/nfd/features/tests/features-test.go#L88)
+```
+
+**Benefits of Dynamic Detection**:
+- ✅ Works with any git repository (no hardcoding needed)
+- ✅ Automatically detects correct branch (main, master, develop, etc.)
+- ✅ Handles repository forks with different URLs
+- ✅ Supports both SSH and HTTPS git URLs
+- ✅ Auto-detects GitHub vs GitLab URL format
+- ✅ Caches git info per repository for performance
+
+#### 3. JSONL Export
+
+**File**: `go-extractor/spec-extractor/internal/extractor/jsonl.go`
+- Added `LineNumber int` field to `PerItRecord` struct
+- Export: `"line_number": 94` in JSONL output
+
+**Example JSONL**:
+```json
+{
+  "desc": "from the same policy",
+  "test_id": "37056",
+  "line_number": 94,
+  "file_path": "/home/flepied/external/cnf-gotests/test/network/ptp/tests/ptp_operator.go"
+}
+```
+
+#### 4. Similarity Matching Exclusion (Python)
+
+**File**: `match/markdown-similarity.py`
+
+**TestContext Dataclass** (line 30-46):
+- Added `line_number: int` field
+- Comment: `# Source file line number - excluded from embeddings, for GitHub links`
+
+**Exclusion Mechanism**:
+Line number is stored in `TestContext` but **NOT included in `_create_combined_text()`**, which generates embedding text. This follows the same pattern as `polarion_test_id` - preserved for metadata but excluded from semantic matching.
+
+**Markdown Parsing** (line 234-263):
+- Parse `- source: [file.go:123](url)` lines
+- Extract line number from `[filename:123]` format
+- Store in `TestContext.line_number`
+
+**JSONL Loading** (line 95-107):
+- Read `line_number` field from JSONL spec
+- Default to `0` if not present (backwards compatibility)
+
+### Why Exclude from Embeddings?
+
+**Problem**: Including line numbers in embeddings would cause functionally identical tests to be considered different just because they're at different line positions.
+
+**Example**:
+```
+Test A at line 50: "Deploy operator and verify status"
+Test B at line 150: "Deploy operator and verify status"
+```
+
+These are the same test but would have different embeddings if line numbers were included. By excluding line numbers:
+- ✅ Tests match based on functionality, not location
+- ✅ Line numbers preserved for GitHub links and debugging
+- ✅ Similarity scores reflect actual test differences
+
+### Adding New Repositories
+
+**No configuration needed!** Source links work automatically for any git repository:
+
+1. Repository must have a git remote configured (`git remote get-url origin`)
+2. Repository should have a default branch set (`git symbolic-ref refs/remotes/origin/HEAD`)
+3. Supported git hosts: GitHub, GitLab (auto-detected from URL)
+4. Supported URL formats: SSH (`git@...`) and HTTPS (`https://...`)
+
+**Fallback behavior**:
+- If default branch detection fails, uses current branch (`git rev-parse --abbrev-ref HEAD`)
+- If current branch fails, defaults to `main`
+- If git remote not found, no source link generated (silently skipped)
+
+### Verification Commands
+
+```bash
+# Check line numbers in JSONL
+jq -r 'select(.line_number > 0) | {desc, line_number}' spec-md/go_specs_per_it.jsonl | head -5
+
+# Check source links in markdown
+grep -r "source:" spec-md/markdown/ | head -5
+
+# Verify line numbers don't affect similarity (check two identical tests at different lines)
+# They should have high similarity scores despite different line numbers
+```
+
+### Troubleshooting: Missing or Incorrect Source Links
+
+**Symptoms**: Markdown files missing `- source:` lines, incorrect URLs, or wrong branch names
+
+**Common Issues and Fixes**:
+
+1. **No source links generated**:
+   - Check if file is in a git repository: `git rev-parse --show-toplevel`
+   - Check if remote is configured: `git remote get-url origin`
+   - Verify extractor can find .git directory from file path
+
+2. **Wrong branch in URLs**:
+   - Check default branch: `git symbolic-ref refs/remotes/origin/HEAD`
+   - If not set, configure it: `git remote set-head origin -a`
+   - Extractor falls back to current branch if default not set
+
+3. **Incorrect repository URL**:
+   - Verify remote URL: `git remote get-url origin`
+   - Supported formats: SSH (`git@host:org/repo.git`) and HTTPS (`https://host/org/repo.git`)
+   - Check if URL parsing works: See `parseGitURL()` function
+
+4. **Performance issues with git calls**:
+   - Git info is cached per repository path
+   - Cache cleared on extractor restart
+   - No performance impact for multiple files in same repository
+
+**Verify git detection manually**:
+```bash
+# Test git detection for a repository
+cd /path/to/repo
+git remote get-url origin                    # Should show git URL
+git symbolic-ref refs/remotes/origin/HEAD   # Should show refs/remotes/origin/BRANCH
+```
+
+### Troubleshooting: If Source Links Disappear
+
+**Symptoms**: Markdown files missing `- source:` lines or JSONL missing `line_number` field
+
+**Check these files**:
+
+1. **Line Number Extraction** (`go-extractor/spec-extractor/internal/extractor/visit.go`)
+   - Verify visitor has `fset *token.FileSet` field
+   - Check `tc.LineNumber = v.fset.Position(call.Pos()).Line` in `IsIt()` handler
+
+2. **JSONL Export** (`go-extractor/spec-extractor/internal/extractor/jsonl.go`)
+   - Verify `PerItRecord` has `LineNumber int` field with JSON tag `line_number,omitempty`
+   - Check `LineNumber: tc.LineNumber` in record creation
+
+3. **Markdown Rendering** (`go-extractor/spec-extractor/internal/extractor/markdown.go`)
+   - Verify `makeGitHubURL()` function exists
+   - Check `renderContainerWithConditions()` signature includes `spec *FileSpec` parameter
+   - Verify source link generation after test_id section
+
+4. **Python Similarity** (`match/markdown-similarity.py`)
+   - Verify `TestContext` dataclass has `line_number: int` field
+   - Check `_create_combined_text()` does NOT include line_number (should be excluded)
+   - Verify markdown parser extracts line number from `- source:` lines
+
+### Troubleshooting: Missing Line Numbers for Entry() Tests
+
+**Symptoms**: Table-driven tests using `Entry()` have missing line numbers while `It()` tests work fine
+
+**Root Cause**: The `Entry()` handler in visit.go was not extracting line numbers like the `It()` handler does.
+
+**Example Tests Affected**:
+```go
+DescribeTable("MetalLB Load balance...",
+    Entry("same node", polarion.ID("53792"), false),     // Was missing line number
+    Entry("different node", polarion.ID("53766"), true), // Was missing line number
+)
+```
+
+**Fix Applied** (`go-extractor/spec-extractor/internal/extractor/visit.go` lines 186-196):
+
+**Before** (missing LineNumber):
+```go
+if v.recog.IsEntry(call) {
+    // ...
+    tc := TestCase{Description: parsed.Description}
+    // ...
+}
+```
+
+**After** (with LineNumber):
+```go
+if v.recog.IsEntry(call) {
+    // ...
+    tc := TestCase{
+        Description: parsed.Description,
+        LineNumber:  v.fset.Position(call.Pos()).Line,  // Added line number extraction
+    }
+    // ...
+}
+```
+
+**Verification**:
+```bash
+# Check Entry() tests have line numbers
+jq -r 'select(.desc == "same node" or .desc == "different node") | {desc, line_number, test_id}' spec-md/go_specs_per_it.jsonl
+
+# Expected output:
+# {"desc": "same node", "line_number": 184, "test_id": "53792"}
+# {"desc": "different node", "line_number": 186, "test_id": "53766"}
+```
+
+### Historical Context
+
+**2026-01-29**: Added line number extraction and GitHub link generation. Line numbers stored in JSONL and used for source links in markdown, but excluded from similarity embeddings to prevent location-based false differences.
+
+**2026-01-29**: Fixed Entry() tests missing line numbers. Entry() handler now extracts line numbers the same way as It() handler (96.7% → 100% coverage).
+
+**2026-01-29**: Replaced hardcoded repository URLs with dynamic git detection. Now reads `git remote get-url origin` and `git symbolic-ref refs/remotes/origin/HEAD` from disk to automatically detect repository URL and default branch. Supports SSH/HTTPS URLs and auto-detects GitHub vs GitLab URL format.

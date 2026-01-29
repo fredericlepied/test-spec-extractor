@@ -9,6 +9,7 @@ import (
 type PerItRecord struct {
 	Desc           string   `json:"desc"`
 	TestID         string   `json:"test_id,omitempty"`
+	LineNumber     int      `json:"line_number,omitempty"`
 	Labels         []string `json:"labels,omitempty"`
 	PrepSteps      []string `json:"prep_steps,omitempty"`
 	SkipConditions []string `json:"skip_conditions,omitempty"`
@@ -42,7 +43,11 @@ func WritePerItJSONL(spec *FileSpec, filePath string) error {
 		for _, tc := range c.Cases {
 			// Emit original test case if it has a description
 			if tc.Description != "" {
-				rec := PerItRecord{Desc: tc.Description, FilePath: spec.FilePath}
+				rec := PerItRecord{
+					Desc:       tc.Description,
+					FilePath:   spec.FilePath,
+					LineNumber: tc.LineNumber,
+				}
 				// Add test ID if present
 				if tc.TestID != "" {
 					rec.TestID = tc.TestID

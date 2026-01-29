@@ -14,6 +14,7 @@ func BuildFileSpec(res *FileResult, cliAliases map[string][]string, goModPath st
 		recog:         recog,
 		constResolver: constResolver,
 		containerSt:   []*Container{root},
+		fset:          res.FileSet,
 	}
 	ast.Inspect(res.AST, v.visit)
 	return &FileSpec{FilePath: res.FilePath, Root: root}
@@ -23,6 +24,7 @@ type visitor struct {
 	recog         *Recognizer
 	constResolver *ConstantResolver
 	containerSt   []*Container
+	fset          *token.FileSet
 }
 
 func (v *visitor) current() *Container { return v.containerSt[len(v.containerSt)-1] }
@@ -109,7 +111,10 @@ func (v *visitor) visit(n ast.Node) bool {
 		// Parse test description to extract embedded labels and test ID
 		parsed := ParseTestDescription(desc)
 
-		tc := TestCase{Description: parsed.Description}
+		tc := TestCase{
+			Description: parsed.Description,
+			LineNumber:  v.fset.Position(call.Pos()).Line,
+		}
 
 		// Add labels from Label() calls
 		tc.Labels = append(tc.Labels, extractLabels(v.recog, v.constResolver, call)...)
@@ -185,7 +190,10 @@ func (v *visitor) visit(n ast.Node) bool {
 			// Parse test description to extract embedded labels and test ID
 			parsed := ParseTestDescription(desc)
 
-			tc := TestCase{Description: parsed.Description}
+			tc := TestCase{
+				Description: parsed.Description,
+				LineNumber:  v.fset.Position(call.Pos()).Line,
+			}
 
 			// Add labels from Label() calls
 			tc.Labels = append(tc.Labels, extractLabels(v.recog, v.constResolver, call)...)

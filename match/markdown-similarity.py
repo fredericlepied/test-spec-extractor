@@ -39,6 +39,7 @@ class TestContext:
     cleanup_steps: List[str]  # Inherited + test-specific
     test_description: str
     polarion_test_id: str  # Test ID from reportxml.ID("12345") - excluded from embeddings
+    line_number: int  # Source file line number - excluded from embeddings, for GitHub links
     test_labels: List[str]
     test_steps: List[str]
     test_prep_steps: List[str]  # Test-specific prep
@@ -100,6 +101,7 @@ class MarkdownSimilarityAnalyzer:
             cleanup_steps=spec.get("cleanup_steps", []),
             test_description=spec["desc"],
             polarion_test_id=spec.get("test_id", ""),
+            line_number=spec.get("line_number", 0),  # Line number from source file, excluded from embeddings
             test_labels=spec.get("labels", []),
             test_steps=spec.get("steps", []),
             test_prep_steps=[],  # Will be separated from prep_steps
@@ -208,6 +210,7 @@ class MarkdownSimilarityAnalyzer:
                 # Skip tests with empty descriptions (but still process them)
                 test_labels = []
                 polarion_test_id = ""
+                source_line_number = 0
                 test_prep = []
                 test_skip = []
                 test_steps = []
@@ -242,6 +245,21 @@ class MarkdownSimilarityAnalyzer:
                                     polarion_test_id = full_id[4:]  # Skip "OCP-"
                                 else:
                                     polarion_test_id = full_id
+                        i += 1
+                    elif inner_line.startswith("  - source:"):
+                        # Extract line number from markdown link: [file.go:123](url)
+                        source_text = inner_line[11:].strip()
+                        if source_text.startswith("["):
+                            # Extract from [file.go:123]
+                            end_bracket = source_text.find("]")
+                            if end_bracket > 0:
+                                file_and_line = source_text[1:end_bracket]  # Skip "["
+                                # Extract line number after ":"
+                                if ":" in file_and_line:
+                                    try:
+                                        source_line_number = int(file_and_line.split(":")[-1])
+                                    except ValueError:
+                                        pass  # Invalid line number, keep default 0
                         i += 1
                     elif inner_line.startswith("  - preparation:"):
                         i += 1
@@ -303,6 +321,7 @@ class MarkdownSimilarityAnalyzer:
                     cleanup_steps=current_cleanup.copy(),
                     test_description=test_desc,
                     polarion_test_id=polarion_test_id,
+                    line_number=source_line_number,
                     test_labels=test_labels,
                     test_steps=test_steps,
                     test_prep_steps=test_prep,

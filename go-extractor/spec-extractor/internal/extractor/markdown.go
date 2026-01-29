@@ -3,7 +3,11 @@ package extractor
 import (
 	"bytes"
 	"fmt"
+	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 )
 
 // transformSkipMessage transforms negative skip/expect messages to positive test descriptions
@@ -117,17 +121,172 @@ func transformSkipMessage(msg string) string {
 	return msg
 }
 
+// gitRepoCache stores git repository information to avoid repeated git calls
+var (
+	gitRepoCache = make(map[string]*gitRepoInfo)
+	gitCacheMu   sync.RWMutex
+)
+
+// gitRepoInfo contains git repository metadata
+type gitRepoInfo struct {
+	remoteURL     string
+	defaultBranch string
+	baseURL       string
+}
+
+// getGitRepoInfo retrieves git repository information from disk
+func getGitRepoInfo(repoPath string) (*gitRepoInfo, error) {
+	gitCacheMu.RLock()
+	if info, found := gitRepoCache[repoPath]; found {
+		gitCacheMu.RUnlock()
+		return info, nil
+	}
+	gitCacheMu.RUnlock()
+
+	// Get remote URL
+	cmd := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get git remote: %w", err)
+	}
+	remoteURL := strings.TrimSpace(string(output))
+
+	// Get default branch (try symbolic-ref first, fallback to HEAD)
+	cmd = exec.Command("git", "-C", repoPath, "symbolic-ref", "refs/remotes/origin/HEAD")
+	output, err = cmd.Output()
+	var defaultBranch string
+	if err == nil {
+		// Output format: refs/remotes/origin/main
+		ref := strings.TrimSpace(string(output))
+		parts := strings.Split(ref, "/")
+		if len(parts) > 0 {
+			defaultBranch = parts[len(parts)-1]
+		}
+	}
+	if defaultBranch == "" {
+		// Fallback: try to get current branch
+		cmd = exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+		output, err = cmd.Output()
+		if err == nil {
+			defaultBranch = strings.TrimSpace(string(output))
+		}
+	}
+	if defaultBranch == "" {
+		defaultBranch = "main" // Ultimate fallback
+	}
+
+	// Parse remote URL to build base URL
+	baseURL := parseGitURL(remoteURL, defaultBranch)
+
+	info := &gitRepoInfo{
+		remoteURL:     remoteURL,
+		defaultBranch: defaultBranch,
+		baseURL:       baseURL,
+	}
+
+	gitCacheMu.Lock()
+	gitRepoCache[repoPath] = info
+	gitCacheMu.Unlock()
+
+	return info, nil
+}
+
+// parseGitURL converts a git remote URL to a web-browsable base URL
+func parseGitURL(remoteURL, branch string) string {
+	// SSH format: git@github.com:org/repo.git
+	sshPattern := regexp.MustCompile(`git@([^:]+):([^/]+/[^.]+)(?:\.git)?`)
+	if matches := sshPattern.FindStringSubmatch(remoteURL); len(matches) == 3 {
+		host := matches[1]
+		path := matches[2]
+		// GitLab uses /-/blob/, GitHub uses /blob/
+		if strings.Contains(host, "gitlab") {
+			return fmt.Sprintf("https://%s/%s/-/blob/%s", host, path, branch)
+		}
+		return fmt.Sprintf("https://%s/%s/blob/%s", host, path, branch)
+	}
+
+	// HTTPS format: https://github.com/org/repo.git
+	httpsPattern := regexp.MustCompile(`https://([^/]+)/([^/]+/[^.]+?)(?:\.git)?$`)
+	if matches := httpsPattern.FindStringSubmatch(remoteURL); len(matches) == 3 {
+		host := matches[1]
+		path := matches[2]
+		// GitLab uses /-/blob/, GitHub uses /blob/
+		if strings.Contains(host, "gitlab") {
+			return fmt.Sprintf("https://%s/%s/-/blob/%s", host, path, branch)
+		}
+		return fmt.Sprintf("https://%s/%s/blob/%s", host, path, branch)
+	}
+
+	return ""
+}
+
+// findGitRepoRoot walks up the directory tree to find the git repository root
+func findGitRepoRoot(filePath string) string {
+	dir := filepath.Dir(filePath)
+	for {
+		gitDir := filepath.Join(dir, ".git")
+		if info, err := exec.Command("test", "-d", gitDir).Output(); err == nil && info != nil {
+			return dir
+		}
+		// Quick check using git command itself
+		cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
+		if output, err := cmd.Output(); err == nil {
+			return strings.TrimSpace(string(output))
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
+// makeGitHubURL generates a GitHub/GitLab source link from a file path and line number
+// by dynamically reading git repository information from disk
+// Example: https://github.com/openshift/openshift-tests/blob/master/test/extended/operators/olm.go#L123
+func makeGitHubURL(filePath string, lineNumber int) string {
+	if lineNumber <= 0 {
+		return ""
+	}
+
+	// Find git repository root
+	repoRoot := findGitRepoRoot(filePath)
+	if repoRoot == "" {
+		return ""
+	}
+
+	// Get git repository information
+	info, err := getGitRepoInfo(repoRoot)
+	if err != nil || info.baseURL == "" {
+		return ""
+	}
+
+	// Calculate relative path from repo root
+	relPath, err := filepath.Rel(repoRoot, filePath)
+	if err != nil {
+		return ""
+	}
+
+	// Convert to forward slashes for URLs
+	relPath = filepath.ToSlash(relPath)
+
+	// Build final URL with line anchor
+	return fmt.Sprintf("%s/%s#L%d", info.baseURL, relPath, lineNumber)
+}
+
 func RenderMarkdown(spec *FileSpec) []byte {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "## %s\n\n", spec.FilePath)
 	// Walk containers from root
 	for _, c := range spec.Root.Children {
-		renderContainerWithConditions(&b, c, 0, []string{})
+		renderContainerWithConditions(&b, spec, c, 0, []string{})
 	}
 	return b.Bytes()
 }
 
-func renderContainerWithConditions(b *bytes.Buffer, c *Container, depth int, whenConditions []string) {
+func renderContainerWithConditions(b *bytes.Buffer, spec *FileSpec, c *Container, depth int, whenConditions []string) {
 	// Heading level by depth: 0=>###, 1=>####, 2=>#####
 	level := 3 + depth
 	if level > 6 {
@@ -190,6 +349,12 @@ func renderContainerWithConditions(b *bytes.Buffer, c *Container, depth int, whe
 					polarionURL := fmt.Sprintf("https://polarion.engineering.redhat.com/polarion/#/project/OSE/workitem?id=%s", polarionID)
 					fmt.Fprintf(b, "  - test_id: [%s](%s)\n", displayID, polarionURL)
 				}
+				// Add source code link if line number is available
+				if tc.LineNumber > 0 {
+					if sourceURL := makeGitHubURL(spec.FilePath, tc.LineNumber); sourceURL != "" {
+						fmt.Fprintf(b, "  - source: [%s:%d](%s)\n", filepath.Base(spec.FilePath), tc.LineNumber, sourceURL)
+					}
+				}
 				if len(tc.PrepSteps) > 0 {
 					fmt.Fprintf(b, "  - preparation:\n")
 					for _, s := range tc.PrepSteps {
@@ -235,7 +400,7 @@ func renderContainerWithConditions(b *bytes.Buffer, c *Container, depth int, whe
 	}
 
 	for _, child := range c.Children {
-		renderContainerWithConditions(b, child, depth+1, childWhenConditions)
+		renderContainerWithConditions(b, spec, child, depth+1, childWhenConditions)
 	}
 }
 
