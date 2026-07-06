@@ -105,6 +105,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize K8s resource scanner
+	var resourceScanner *extractor.ResourceScanner
+	if modulePath, modDir, err := extractor.FindGoMod(cfg.root); err == nil {
+		resourceScanner = extractor.NewResourceScanner(modulePath, modDir)
+	}
+
 	var files []string
 	err := filepath.Walk(cfg.root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -139,6 +145,9 @@ func main() {
 		}
 		// Build spec, and only write if the file contains at least one test case
 		spec := extractor.BuildFileSpec(res, cfg.aliases, cfg.root)
+		if resourceScanner != nil {
+			spec.K8sResources = resourceScanner.ScanFile(res.ImportMap)
+		}
 		if spec.HasTests() {
 			rel, err := filepath.Rel(cfg.root, f)
 			if err != nil {
