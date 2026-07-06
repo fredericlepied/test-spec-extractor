@@ -832,3 +832,49 @@ jq -r 'select(.desc == "same node" or .desc == "different node") | {desc, line_n
 **2026-01-29**: Fixed Entry() tests missing line numbers. Entry() handler now extracts line numbers the same way as It() handler (96.7% → 100% coverage).
 
 **2026-01-29**: Replaced hardcoded repository URLs with dynamic git detection. Now reads `git remote get-url origin` and `git symbolic-ref refs/remotes/origin/HEAD` from disk to automatically detect repository URL and default branch. Supports SSH/HTTPS URLs and auto-detects GitHub vs GitLab URL format.
+
+## K8s Resource Detection
+
+### Overview
+
+Each test file is annotated with the K8s resources it exercises (Pod, Deployment, Service, etc.). Resources are detected via three complementary signals and used in similarity matching to improve cross-language and cross-repo matching quality.
+
+### Go Detection (resources.go)
+
+Three detection methods, applied per file:
+
+1. **eco-goinfra package imports**: `pkg/pod` → `Pod`, `pkg/deployment` → `Deployment`. Normalized via `ecoGoinfraResourceMap`.
+2. **k8s.io/api type references**: `corev1.Pod`, `appsv1.Deployment` matched against `k8sResourceTypes` set. Sub-types (Container, Volume) and constants (PodRunning) are excluded.
+3. **oc.Run patterns**: `.Run("get").Args("pod")` detected via `ocRunArgsRe` regex, normalized via `ocRunResourceMap`. Used by openshift-tests and openshift-tests-private.
+
+Transitive scanning follows same-module imports recursively through helper packages (cycle-safe, cached per directory). The test file itself is also scanned directly for `oc.Run` patterns.
+
+**Key files**:
+- `go-extractor/spec-extractor/internal/extractor/resources.go` — scanner, normalization maps, regex patterns
+- `go-extractor/spec-extractor/internal/extractor/resources_test.go` — unit tests
+
+**Common resources excluded from similarity** (>30% frequency): filtered by `_compute_common_resources()` in the Python similarity layer.
+
+### Python Detection (parser.py)
+
+Detection via AST analysis of function call arguments:
+
+1. **Direct K8s calls**: `oc.selector("pod")`, `get_resource("node")`, `get_resource_from_namespace("PtpConfig", ns)`
+2. **Dict kind values**: `create_api_object({"kind": "PVC"})`
+3. **Helper function map** (`_HELPER_RESOURCE_MAP`): `get_pods_list` → Pod, `get_operator_info` → OLM, `validate_configurations` → PTP, etc.
+4. **Full AST walking**: `_scan_function_for_k8s_resources()` uses `ast.walk()` to find calls nested in try/except, if/else, loops
+5. **Module-level scanning**: `parse_file()` walks the entire module AST for K8s calls outside function bodies
+
+Resource names are normalized to match Go conventions for cross-language similarity: `csv` → `OLM`, `baremetalhosts` → `BMC`, `managedcluster` → `OCM`, `clusterdeployment` → `Hive`, `ptpconfig` → `PTP`.
+
+**Key file**: `py-extractor/spec_extractor/parser.py` — `_K8S_RESOURCE_MAP`, `_HELPER_RESOURCE_MAP`, `_detect_k8s_resource_from_call()`
+
+### Similarity Integration (markdown-similarity.py)
+
+- Resources included in embedding text via `_create_combined_text()` (only distinctive/rare resources)
+- Resources used in context similarity scoring via `_calculate_context_similarity()` (0.2 weight)
+- Common resources (>30% frequency) filtered by `_compute_common_resources()` to prevent false positives
+
+### Quality Metrics
+
+The shell script reports per-repo K8s resource detection coverage after extraction. Files with <50% coverage trigger a `[WARNING]` to flag potential detection gaps.
