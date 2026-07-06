@@ -2,7 +2,7 @@
 
 from typing import List
 
-from .types import Container, FileSpec, TestCase, TestStep
+from .types import Container, FileSpec
 
 
 def render_markdown(spec: FileSpec) -> bytes:

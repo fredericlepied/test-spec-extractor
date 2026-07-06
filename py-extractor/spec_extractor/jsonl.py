@@ -1,9 +1,8 @@
 """JSONL output matching Go extractor PerItRecord format exactly."""
 
 import json
-from typing import Optional
 
-from .types import Container, FileSpec, TestCase
+from .types import Container, FileSpec
 
 
 def write_per_it_jsonl(spec: FileSpec, file_path: str) -> None:

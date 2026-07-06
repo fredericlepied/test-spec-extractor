@@ -1,6 +1,6 @@
 """Data structures matching Go extractor exactly."""
 
-from typing import List, Optional
+from typing import List
 
 
 class TestStep:
