@@ -318,6 +318,38 @@ if [[ ${#PY_ROOTS[@]} -gt 0 ]]; then
     TOTAL_FILES=$((TOTAL_FILES + PY_TOTAL_FILES))
 fi
 
+# K8s Resource Quality Check
+print_status "K8s resource detection quality check..."
+
+ABS_MARKDOWN_DIR="$PROJECT_ROOT/$MARKDOWN_DIR"
+for go_root in "${GO_ROOTS[@]}"; do
+    repo_name=$(basename "$go_root")
+    total_files=$(find "$ABS_MARKDOWN_DIR/$repo_name" -name "*.md" 2>/dev/null | wc -l)
+    files_with_resources=$(grep -rl "k8s resources" "$ABS_MARKDOWN_DIR/$repo_name" 2>/dev/null | wc -l)
+    if [[ "$total_files" -gt 0 ]]; then
+        pct=$((files_with_resources * 100 / total_files))
+        if [[ "$pct" -lt 50 ]]; then
+            print_warning "  $repo_name (Go): $files_with_resources/$total_files files with k8s resources (${pct}%) - LOW COVERAGE"
+        else
+            print_success "  $repo_name (Go): $files_with_resources/$total_files files with k8s resources (${pct}%)"
+        fi
+    fi
+done
+for py_root in "${PY_ROOTS[@]}"; do
+    repo_name=$(basename "$py_root")
+    total_files=$(find "$ABS_MARKDOWN_DIR/$repo_name" -name "*.md" 2>/dev/null | wc -l)
+    files_with_resources=$(grep -rl "k8s resources" "$ABS_MARKDOWN_DIR/$repo_name" 2>/dev/null | wc -l)
+    if [[ "$total_files" -gt 0 ]]; then
+        pct=$((files_with_resources * 100 / total_files))
+        if [[ "$pct" -lt 50 ]]; then
+            print_warning "  $repo_name (Python): $files_with_resources/$total_files files with k8s resources (${pct}%) - LOW COVERAGE"
+        else
+            print_success "  $repo_name (Python): $files_with_resources/$total_files files with k8s resources (${pct}%)"
+        fi
+    fi
+done
+echo
+
 # Step 3: Markdown-Aware Similarity Analysis
 print_status "Step 3: Running markdown-aware similarity analysis..."
 

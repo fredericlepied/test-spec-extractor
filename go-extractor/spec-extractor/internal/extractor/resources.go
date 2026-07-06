@@ -78,6 +78,9 @@ var k8sAPIImportRe = regexp.MustCompile(`(\w+)\s+"k8s\.io/api/`)
 // k8sTypeRefRe matches type references like corev1.Pod, appsv1.Deployment
 var k8sTypeRefRe = regexp.MustCompile(`\b(\w+)\.([A-Z][A-Za-z]+)`)
 
+// ocRunArgsRe matches .Run("get").Args("pods", ...) patterns used in openshift-tests
+var ocRunArgsRe = regexp.MustCompile(`\.Run\("(?:get|delete|create|describe|patch|apply|replace)"\)\.Args\("([^"]+)"`)
+
 type fileScanResult struct {
 	imports     []string        // all import paths
 	k8sTypeRefs []string        // K8s resource type names found (deduplicated)
@@ -139,13 +142,20 @@ func NewResourceScanner(modulePath, repoRoot string) *ResourceScanner {
 	}
 }
 
-// ScanFile takes a file's ImportMap and returns sorted, deduplicated K8s resource names.
-func (rs *ResourceScanner) ScanFile(importMap map[string]string) []string {
+// ScanFile scans a test file and its transitive imports for K8s resource types.
+func (rs *ResourceScanner) ScanFile(filePath string, importMap map[string]string) []string {
 	if rs == nil {
 		return nil
 	}
 	resources := map[string]bool{}
 	visited := map[string]bool{}
+
+	// Scan the test file itself for oc.Run and type references
+	result := scanGoFile(filePath)
+	rs.cache[filePath] = result
+	for _, ref := range result.k8sTypeRefs {
+		resources[ref] = true
+	}
 
 	for _, fullPath := range importMap {
 		// Direct eco-goinfra imports
@@ -162,12 +172,12 @@ func (rs *ResourceScanner) ScanFile(importMap map[string]string) []string {
 	if len(resources) == 0 {
 		return nil
 	}
-	result := make([]string, 0, len(resources))
+	out := make([]string, 0, len(resources))
 	for r := range resources {
-		result = append(result, r)
+		out = append(out, r)
 	}
-	sort.Strings(result)
-	return result
+	sort.Strings(out)
+	return out
 }
 
 func (rs *ResourceScanner) scanDir(dir string, visited map[string]bool, resources map[string]bool) {
@@ -266,10 +276,11 @@ func scanGoFile(path string) *fileScanResult {
 		}
 	}
 
-	// Second pass: find k8s type references if we have k8s API aliases
-	if len(result.k8sAPIAlias) > 0 {
-		seen := map[string]bool{}
-		for _, line := range lines {
+	// Second pass: find k8s type references and oc.Run patterns
+	seen := map[string]bool{}
+	for _, line := range lines {
+		// k8s API type references (corev1.Pod, etc.)
+		if len(result.k8sAPIAlias) > 0 {
 			for _, match := range k8sTypeRefRe.FindAllStringSubmatch(line, -1) {
 				alias := match[1]
 				typeName := match[2]
@@ -278,6 +289,19 @@ func scanGoFile(path string) *fileScanResult {
 						seen[r] = true
 						result.k8sTypeRefs = append(result.k8sTypeRefs, r)
 					}
+				}
+			}
+		}
+		// oc.Run("get").Args("pod", ...) patterns
+		if matches := ocRunArgsRe.FindAllStringSubmatch(line, -1); len(matches) > 0 {
+			for _, match := range matches {
+				arg := match[1]
+				if strings.HasPrefix(arg, "-") {
+					continue
+				}
+				if r := normalizeOcRunResource(arg); r != "" && !seen[r] {
+					seen[r] = true
+					result.k8sTypeRefs = append(result.k8sTypeRefs, r)
 				}
 			}
 		}
@@ -336,6 +360,69 @@ func lookupK8sResourceType(typeName string) string {
 		if k8sResourceTypes[base] {
 			return base
 		}
+	}
+	return ""
+}
+
+// ocRunResourceMap normalizes oc CLI resource names to canonical names.
+var ocRunResourceMap = map[string]string{
+	"pod": "Pod", "pods": "Pod",
+	"node": "Node", "nodes": "Node",
+	"ns": "Namespace", "namespace": "Namespace", "namespaces": "Namespace",
+	"deploy": "Deployment", "deployment": "Deployment", "deployments": "Deployment",
+	"svc": "Service", "service": "Service", "services": "Service",
+	"secret": "Secret", "secrets": "Secret",
+	"cm": "ConfigMap", "configmap": "ConfigMap", "configmaps": "ConfigMap",
+	"sa": "ServiceAccount", "serviceaccount": "ServiceAccount", "serviceaccounts": "ServiceAccount",
+	"ds": "DaemonSet", "daemonset": "DaemonSet", "daemonsets": "DaemonSet",
+	"sts": "StatefulSet", "statefulset": "StatefulSet", "statefulsets": "StatefulSet",
+	"rs": "ReplicaSet", "replicaset": "ReplicaSet", "replicasets": "ReplicaSet",
+	"pv": "PersistentVolume", "persistentvolume": "PersistentVolume", "persistentvolumes": "PersistentVolume",
+	"pvc": "PersistentVolumeClaim", "persistentvolumeclaim": "PersistentVolumeClaim", "persistentvolumeclaims": "PersistentVolumeClaim",
+	"job": "Job", "jobs": "Job",
+	"cj": "CronJob", "cronjob": "CronJob", "cronjobs": "CronJob",
+	"route": "Route", "routes": "Route",
+	"ingress": "Ingress", "ingresses": "Ingress",
+	"networkpolicy": "NetworkPolicy", "networkpolicies": "NetworkPolicy",
+	"co": "ClusterOperator", "clusteroperator": "ClusterOperator", "clusteroperators": "ClusterOperator",
+	"csv": "OLM",
+	"sub": "OLM", "subscription": "OLM", "subscriptions": "OLM",
+	"bc":    "BuildConfig",
+	"build": "Build", "builds": "Build",
+	"dc": "DeploymentConfig",
+	"is": "ImageStream", "imagestream": "ImageStream", "imagestreams": "ImageStream",
+	"role": "Role", "roles": "Role",
+	"rolebinding": "RoleBinding", "rolebindings": "RoleBinding",
+	"clusterrole": "ClusterRole", "clusterroles": "ClusterRole",
+	"clusterrolebinding": "ClusterRoleBinding", "clusterrolebindings": "ClusterRoleBinding",
+	"sc": "StorageClass", "storageclass": "StorageClass", "storageclasses": "StorageClass",
+	"infrastructure": "Infrastructure",
+	"machineconfig":  "MachineConfig", "mc": "MachineConfig",
+	"machineconfigpool": "MachineConfigPool", "mcp": "MachineConfigPool",
+	"machine": "Machine", "machines": "Machine",
+	"machineset": "MachineSet", "machinesets": "MachineSet",
+}
+
+func normalizeOcRunResource(arg string) string {
+	// Strip resource/name patterns like "deployment/myapp" or "pods/mypod"
+	if idx := strings.IndexByte(arg, '/'); idx > 0 {
+		arg = arg[:idx]
+	}
+	// Strip fully-qualified resource names like "configs.imageregistry/cluster"
+	if idx := strings.IndexByte(arg, '.'); idx > 0 {
+		arg = arg[:idx]
+	}
+	lower := strings.ToLower(arg)
+	if r, ok := ocRunResourceMap[lower]; ok {
+		return r
+	}
+	// Skip flags and unknown short names
+	if len(arg) <= 3 {
+		return ""
+	}
+	// Unknown but looks like a resource name
+	if arg[0] >= 'A' && arg[0] <= 'Z' {
+		return arg
 	}
 	return ""
 }

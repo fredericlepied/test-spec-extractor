@@ -257,8 +257,23 @@ func Deploy() {
 		"helper": "github.com/example/myrepo/internal/helper",
 	}
 
+	// Create a test file that uses oc.Run
+	testFile := filepath.Join(tmpDir, "test.go")
+	testContent := `package test
+
+import (
+	"github.com/rh-ecosystem-edge/eco-goinfra/pkg/pod"
+	"github.com/example/myrepo/internal/helper"
+)
+
+func TestSomething() {
+	pod.List()
+}
+`
+	os.WriteFile(testFile, []byte(testContent), 0o644)
+
 	scanner := NewResourceScanner("github.com/example/myrepo", tmpDir)
-	resources := scanner.ScanFile(importMap)
+	resources := scanner.ScanFile(testFile, importMap)
 
 	// Should find: Pod (direct), Deployment (transitive via helper), Service (k8s type in helper)
 	want := map[string]bool{"Pod": true, "Deployment": true, "Service": true}

@@ -142,7 +142,7 @@ func main() {
 		// Build spec, and only write if the file contains at least one test case
 		spec := extractor.BuildFileSpec(res, cfg.aliases, cfg.root)
 		if resourceScanner != nil {
-			spec.K8sResources = resourceScanner.ScanFile(res.ImportMap)
+			spec.K8sResources = resourceScanner.ScanFile(f, res.ImportMap)
 		}
 		if spec.HasTests() {
 			rel, err := filepath.Rel(cfg.root, f)
