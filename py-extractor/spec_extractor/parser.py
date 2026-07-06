@@ -34,6 +34,10 @@ def parse_file(file_path: str, fixture_registry: Optional[FixtureRegistry] = Non
     spec = FileSpec(file_path=file_path)
     visitor = TestVisitor(file_path, fixture_registry)
     visitor.visit(tree)
+    # Scan module-level code for K8s resource access (outside function bodies)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            visitor._detect_k8s_resource_from_call(node)
     visitor.build_spec(spec)
     return spec
 
@@ -55,6 +59,7 @@ class TestVisitor(ast.NodeVisitor):
         self.current_class: Optional[str] = None
         self.class_setup_ops: Dict[str, List[TestStep]] = {}  # class_name -> setup steps
         self.class_teardown_ops: Dict[str, List[TestStep]] = {}  # class_name -> teardown steps
+        self.k8s_resources: set = set()
 
     def current_container(self) -> Container:
         """Get the current container from the stack."""
@@ -140,6 +145,9 @@ class TestVisitor(ast.NodeVisitor):
         test_case.steps = steps
         test_case.validations = validations
 
+        # Scan entire function for K8s resource access (including nested try/except)
+        self._scan_function_for_k8s_resources(node)
+
         # Extract fixture dependencies and add as prep steps
         fixture_prep_steps = self._extract_fixture_prep_steps(node)
         test_case.prep_steps.extend(fixture_prep_steps)
@@ -187,6 +195,7 @@ class TestVisitor(ast.NodeVisitor):
             self.root.cases = []
             self.root.children.append(file_container)
         spec.root = self.root
+        spec.k8s_resources = sorted(self.k8s_resources)
 
     def _is_pytest_fixture(self, node: ast.FunctionDef) -> bool:
         """Check if a function is a pytest fixture."""
@@ -447,6 +456,130 @@ class TestVisitor(ast.NodeVisitor):
         else:
             return None
 
+    # Normalization map for K8s resource strings found in Python test code.
+    # Names are aligned with Go extractor conventions for cross-language similarity.
+    _K8S_RESOURCE_MAP = {
+        "pod": "Pod",
+        "pods": "Pod",
+        "node": "Node",
+        "nodes": "Node",
+        "namespace": "Namespace",
+        "namespaces": "Namespace",
+        "clusteroperators": "ClusterOperator",
+        "clusteroperator": "ClusterOperator",
+        "clusterversion": "ClusterVersion",
+        "csv": "OLM",
+        "baremetalhosts": "BMC",
+        "baremetalhost": "BMC",
+        "managedcluster": "OCM",
+        "managedclusters": "OCM",
+        "clusterdeployment": "Hive",
+        "clusterdeployments": "Hive",
+        "multiclusterhub": "OCM",
+        "multiclusterengine": "OCM",
+        "policy": "Policy",
+        "subscription": "OLM",
+        "subscriptions": "OLM",
+        "ptpconfig": "PTP",
+    }
+
+    def _scan_function_for_k8s_resources(self, node: ast.FunctionDef) -> None:
+        """Walk entire function AST to find all K8s resource access calls,
+        including those nested in try/except, if/else, loops, etc."""
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                self._detect_k8s_resource_from_call(child)
+
+    def _detect_k8s_resource_from_call(self, call: ast.Call) -> None:
+        """Check if a call accesses a K8s resource and record it."""
+        func = call.func
+        if isinstance(func, ast.Attribute):
+            if isinstance(func.value, ast.Name) and func.value.id == "oc":
+                if func.attr == "selector" and call.args:
+                    resource = self._extract_string_literal(call.args[0])
+                    if resource:
+                        self._record_k8s_resource(resource)
+        elif isinstance(func, ast.Name):
+            name = func.id
+            if name == "get_resource" and call.args:
+                resource = self._extract_string_literal(call.args[0])
+                if resource:
+                    self._record_k8s_resource(resource)
+            elif name == "get_resource_from_namespace" and call.args:
+                resource = self._extract_string_literal(call.args[0])
+                if resource:
+                    self._record_k8s_resource(resource)
+            elif name == "create_api_object":
+                self._extract_kind_from_dict_arg(call)
+            elif name == "delete_object" and len(call.args) >= 2:
+                obj_type = self._extract_string_literal(call.args[1])
+                if obj_type:
+                    self._record_k8s_resource(obj_type)
+            elif name in ("get_object_by_name", "get_objects_by_type"):
+                arg_idx = 1 if name == "get_object_by_name" else 0
+                if len(call.args) > arg_idx:
+                    obj_type = self._extract_string_literal(call.args[arg_idx])
+                    if obj_type:
+                        self._record_k8s_resource(obj_type)
+            elif name in self._HELPER_RESOURCE_MAP:
+                self._record_k8s_resource(self._HELPER_RESOURCE_MAP[name])
+
+    # Well-known helper functions that access K8s resources
+    _HELPER_RESOURCE_MAP = {
+        "verify_all_nodes_ready": "node",
+        "await_all_nodes_ready": "node",
+        "get_available_nodes_list": "node",
+        "get_running_nodes_list": "node",
+        "get_node_obj_by_name": "node",
+        "get_pod_obj_by_name": "pods",
+        "get_pod_status": "pods",
+        "get_pod_condition_status": "pods",
+        "get_pod_image": "pods",
+        "get_containers_logs": "pods",
+        "get_container_log": "pods",
+        "check_pod_logs_errors": "pods",
+        "check_container_log_errors": "pods",
+        "get_total_pod_restart_count_from_namespace": "pods",
+        "get_namespaces": "namespace",
+        "get_cluster_major_version": "clusterversion",
+        "get_cluster_node_cgroupmode": "node",
+        "get_operator_info": "OLM",
+        "validate_configurations": "PTP",
+        "query_node_cpu_avg_for_time": "pods",
+        "query_node_memory_free": "pods",
+        "query_node_consumed_memory_percent": "pods",
+        "check_potential_memory_leak": "pods",
+        "get_node_monitored_alerts": "pods",
+    }
+
+    def _extract_kind_from_dict_arg(self, call: ast.Call) -> None:
+        """Extract 'kind' value from dict literal arguments (e.g., create_api_object({"kind": "Pod"}))."""
+        for arg in call.args:
+            if isinstance(arg, ast.Dict):
+                for key, value in zip(arg.keys, arg.values):
+                    key_str = _get_string_value(key) if key else None
+                    if key_str == "kind":
+                        kind = _get_string_value(value) if value else None
+                        if kind:
+                            self._record_k8s_resource(kind)
+
+    def _record_k8s_resource(self, raw_name: str) -> None:
+        """Normalize a raw K8s resource string and record it."""
+        if not raw_name:
+            return
+        # Strip object name after / (e.g., "nodes.config/cluster" -> "nodes.config")
+        if "/" in raw_name:
+            raw_name = raw_name.split("/")[0]
+        # Handle fully-qualified CRD names (e.g., "subscriptions.operators.coreos.com")
+        if "." in raw_name:
+            raw_name = raw_name.split(".")[0]
+        # Check normalization map (case-insensitive)
+        normalized = self._K8S_RESOURCE_MAP.get(raw_name.lower())
+        if normalized:
+            self.k8s_resources.add(normalized)
+        elif raw_name[0:1].isupper():
+            self.k8s_resources.add(raw_name)
+
     def _extract_step_from_call(self, call: ast.Call) -> Optional[str]:
         """Extract step description from a function call."""
         func = call.func
@@ -459,6 +592,7 @@ class TestVisitor(ast.NodeVisitor):
                         arg = call.args[0]
                         resource = self._extract_string_literal(arg)
                         if resource:
+                            self._record_k8s_resource(resource)
                             return f"getting {resource} resources"
                     return "getting resources"
                 elif func.attr in ["get", "create", "delete", "patch", "replace"]:
@@ -471,25 +605,25 @@ class TestVisitor(ast.NodeVisitor):
                 if call.args:
                     resource = self._extract_string_literal(call.args[0])
                     if resource:
+                        self._record_k8s_resource(resource)
                         return f"getting {resource} resource"
                 return "getting resource"
             elif func_name == "get_resource_from_namespace":
-                # Extract resource type and namespace
                 args = self._extract_call_arguments(call)
                 if len(args) >= 2:
                     resource_type = args[0]
                     namespace = args[1]
+                    self._record_k8s_resource(resource_type)
                     return f"get {resource_type} from {namespace} namespace"
                 elif len(args) == 1:
+                    self._record_k8s_resource(args[0])
                     return f"get {args[0]} from namespace"
                 return "getting resource from namespace"
             elif func_name == "get_operator_info":
-                # Extract operator name and namespace
                 args = self._extract_call_arguments(call)
                 if len(args) >= 2:
                     operator_name = args[0]
                     namespace = args[1]
-                    # Make operator name more readable
                     readable_name = operator_name.replace("-", " ").title()
                     return f"get {readable_name} operator info from {namespace} namespace"
                 elif len(args) == 1:
@@ -497,9 +631,29 @@ class TestVisitor(ast.NodeVisitor):
                     return f"get {readable_name} operator info"
                 return "get operator info"
             elif func_name == "get_pods_list":
+                self._record_k8s_resource("pods")
                 return "getting pods list"
             elif func_name == "get_node_status":
+                self._record_k8s_resource("node")
                 return "getting node status"
+            elif func_name == "create_api_object":
+                self._extract_kind_from_dict_arg(call)
+                return "creating API object"
+            elif func_name == "delete_object":
+                if len(call.args) >= 2:
+                    obj_type = self._extract_string_literal(call.args[1])
+                    if obj_type:
+                        self._record_k8s_resource(obj_type)
+                return "deleting object"
+            elif func_name in ("get_object_by_name", "get_objects_by_type"):
+                if call.args:
+                    arg_idx = 1 if func_name == "get_object_by_name" else 0
+                    if len(call.args) > arg_idx:
+                        obj_type = self._extract_string_literal(call.args[arg_idx])
+                        if obj_type:
+                            self._record_k8s_resource(obj_type)
+            if func_name in self._HELPER_RESOURCE_MAP:
+                self._record_k8s_resource(self._HELPER_RESOURCE_MAP[func_name])
             elif func_name.startswith("test_"):
                 # Test helper function call
                 return f"running {func_name.replace('_', ' ')}"

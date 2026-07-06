@@ -10,6 +10,9 @@ def render_markdown(spec: FileSpec) -> bytes:
     lines = []
     lines.append(f"## {spec.file_path}\n")
 
+    if spec.k8s_resources:
+        lines.append(f"- **k8s resources**: {', '.join(spec.k8s_resources)}\n")
+
     # Walk containers from root
     for container in spec.root.children:
         _render_container(lines, container, 0, [])

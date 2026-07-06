@@ -56,6 +56,7 @@ class FileSpec:
     def __init__(self, file_path: str):
         self.file_path: str = file_path
         self.root: Container = Container(kind="Root")
+        self.k8s_resources: List[str] = []
 
     def has_tests(self) -> bool:
         """Returns true if any Container in the tree contains at least one TestCase."""
