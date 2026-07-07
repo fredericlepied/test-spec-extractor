@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 type PerItRecord struct {
@@ -18,6 +20,24 @@ type PerItRecord struct {
 	CleanupSteps   []string `json:"cleanup_steps,omitempty"`
 	FilePath       string   `json:"file_path,omitempty"`
 	K8sResources   []string `json:"k8s_resources,omitempty"`
+	SourceURL      string   `json:"source_url,omitempty"`
+	Repo           string   `json:"repo,omitempty"`
+}
+
+// extractRepoName extracts the repository name from an absolute file path.
+// It looks for a path segment after "external/" (e.g. /home/user/external/eco-gotests/... → "eco-gotests").
+// Falls back to the git repository root directory name.
+func extractRepoName(filePath string) string {
+	parts := strings.Split(filepath.ToSlash(filePath), "/")
+	for i, p := range parts {
+		if p == "external" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	if root := findGitRepoRoot(filePath); root != "" {
+		return filepath.Base(root)
+	}
+	return ""
 }
 
 // WritePerItJSONL appends one JSON object per test case found in the FileSpec to the given writer.
@@ -49,6 +69,8 @@ func WritePerItJSONL(spec *FileSpec, filePath string) error {
 					FilePath:     spec.FilePath,
 					LineNumber:   tc.LineNumber,
 					K8sResources: spec.K8sResources,
+					SourceURL:    makeGitHubURL(spec.FilePath, tc.LineNumber),
+					Repo:         extractRepoName(spec.FilePath),
 				}
 				// Add test ID if present
 				if tc.TestID != "" {

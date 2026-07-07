@@ -91,6 +91,28 @@ Score: 0.933 [cnf-gotests <-> eco-gotests]
 }
 ```
 
+## Web Explorer
+
+The project includes an interactive web UI to browse test specs, similarity matches, and K8s resource coverage.
+
+```bash
+# Build (requires Node.js)
+cd web
+npm install
+npm run build
+
+# Serve the result
+cd dist
+python3 -m http.server 8080
+# Open http://localhost:8080
+```
+
+The `dist/` directory is self-contained (HTML + JS + data) and can be copied anywhere. Five views: Dashboard, Similarity, Clusters, Graph, and Catalog.
+
+See [web/README.md](web/README.md) for full feature documentation.
+
+The web data is regenerated automatically when running `extract-spec-md.sh` or `npm run build`.
+
 ## Architecture
 
 ```
@@ -98,7 +120,8 @@ extract-spec-md.sh
     ├─→ Go Extractor (AST + import scanning)  → go_specs_per_it.jsonl + markdown/
     ├─→ Python Extractor (AST + call analysis) → py_specs_per_it.jsonl + markdown/
     ├─→ K8s Resource Quality Check             → per-repo coverage stats
-    └─→ Similarity Analysis (FAISS)            → similarity_analysis.md + CSV
+    ├─→ Similarity Analysis (FAISS)            → similarity_analysis.md + CSV + JSON
+    └─→ Web UI Data Prep                       → web/public/data/*.json
 ```
 
 **Components:**
@@ -106,6 +129,7 @@ extract-spec-md.sh
 - **go-extractor/** - Ginkgo/Gomega pattern extraction, transitive K8s resource detection via imports and `oc.Run` patterns
 - **py-extractor/** - pytest pattern extraction, K8s resource detection via `oc.selector`/helper function analysis
 - **match/markdown-similarity.py** - FAISS-based semantic matching with BDD context and K8s resource scoring
+- **web/** - React + Vite interactive explorer (dashboard, similarity browser, test catalog)
 
 ## CLI Options
 
