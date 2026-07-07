@@ -35,10 +35,6 @@ func parseFlags() config {
 	flag.StringVar(&excludeCSV, "exclude", "vendor/**,**/*_testdata/**", "Comma-separated exclude globs")
 	flag.Var(&aliasCSV, "alias", "Repeatable alias mappings: Name=Alt1,Alt2 (can be specified multiple times)")
 	flag.StringVar(&jsonlOut, "jsonl", "", "Optional path to write per-test JSONL records")
-	// Expansion flags (accepted but not yet implemented in markdown extractor)
-	flag.Bool("expand-functions", false, "expand function calls up to k8s/ocp calls (not yet implemented in markdown extractor)")
-	flag.Bool("export-expanded", false, "export expanded code to individual files (not yet implemented in markdown extractor)")
-	flag.String("expanded-output-dir", "", "output directory for expanded code files (not yet implemented in markdown extractor)")
 	flag.Parse()
 
 	cfg := config{
@@ -105,6 +101,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize K8s resource scanner
+	var resourceScanner *extractor.ResourceScanner
+	if modulePath, modDir, err := extractor.FindGoMod(cfg.root); err == nil {
+		resourceScanner = extractor.NewResourceScanner(modulePath, modDir)
+	}
+
 	var files []string
 	err := filepath.Walk(cfg.root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -139,6 +141,9 @@ func main() {
 		}
 		// Build spec, and only write if the file contains at least one test case
 		spec := extractor.BuildFileSpec(res, cfg.aliases, cfg.root)
+		if resourceScanner != nil {
+			spec.K8sResources = resourceScanner.ScanFile(f, res.ImportMap)
+		}
 		if spec.HasTests() {
 			rel, err := filepath.Rel(cfg.root, f)
 			if err != nil {

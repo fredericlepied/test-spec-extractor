@@ -2,13 +2,16 @@
 
 from typing import List
 
-from .types import Container, FileSpec, TestCase, TestStep
+from .types import Container, FileSpec
 
 
 def render_markdown(spec: FileSpec) -> bytes:
     """Render FileSpec to markdown bytes, matching Go extractor format exactly."""
     lines = []
     lines.append(f"## {spec.file_path}\n")
+
+    if spec.k8s_resources:
+        lines.append(f"- **k8s resources**: {', '.join(spec.k8s_resources)}\n")
 
     # Walk containers from root
     for container in spec.root.children:

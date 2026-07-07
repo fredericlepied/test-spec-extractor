@@ -17,6 +17,7 @@ type PerItRecord struct {
 	Validations    []string `json:"validations,omitempty"`
 	CleanupSteps   []string `json:"cleanup_steps,omitempty"`
 	FilePath       string   `json:"file_path,omitempty"`
+	K8sResources   []string `json:"k8s_resources,omitempty"`
 }
 
 // WritePerItJSONL appends one JSON object per test case found in the FileSpec to the given writer.
@@ -44,9 +45,10 @@ func WritePerItJSONL(spec *FileSpec, filePath string) error {
 			// Emit original test case if it has a description
 			if tc.Description != "" {
 				rec := PerItRecord{
-					Desc:       tc.Description,
-					FilePath:   spec.FilePath,
-					LineNumber: tc.LineNumber,
+					Desc:         tc.Description,
+					FilePath:     spec.FilePath,
+					LineNumber:   tc.LineNumber,
+					K8sResources: spec.K8sResources,
 				}
 				// Add test ID if present
 				if tc.TestID != "" {

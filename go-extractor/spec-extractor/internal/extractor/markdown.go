@@ -279,6 +279,9 @@ func makeGitHubURL(filePath string, lineNumber int) string {
 func RenderMarkdown(spec *FileSpec) []byte {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "## %s\n\n", spec.FilePath)
+	if len(spec.K8sResources) > 0 {
+		fmt.Fprintf(&b, "- **k8s resources**: %s\n\n", strings.Join(spec.K8sResources, ", "))
+	}
 	// Walk containers from root
 	for _, c := range spec.Root.Children {
 		renderContainerWithConditions(&b, spec, c, 0, []string{})

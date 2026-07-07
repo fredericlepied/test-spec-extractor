@@ -44,6 +44,7 @@ class TestContext:
     test_steps: List[str]
     test_prep_steps: List[str]  # Test-specific prep
     test_cleanup_steps: List[str]  # Test-specific cleanup
+    k8s_resources: List[str]  # K8s resource types (Pod, Deployment, etc.)
 
 
 @dataclass
@@ -101,11 +102,14 @@ class MarkdownSimilarityAnalyzer:
             cleanup_steps=spec.get("cleanup_steps", []),
             test_description=spec["desc"],
             polarion_test_id=spec.get("test_id", ""),
-            line_number=spec.get("line_number", 0),  # Line number from source file, excluded from embeddings
+            line_number=spec.get(
+                "line_number", 0
+            ),  # Line number from source file, excluded from embeddings
             test_labels=spec.get("labels", []),
             test_steps=spec.get("steps", []),
             test_prep_steps=[],  # Will be separated from prep_steps
             test_cleanup_steps=[],
+            k8s_resources=spec.get("k8s_resources", []),
         )
 
     def load_markdown_specs(self, markdown_dir: str) -> List[TestContext]:
@@ -157,6 +161,16 @@ class MarkdownSimilarityAnalyzer:
         current_prep = []
         current_skip = []
         current_cleanup = []
+        file_k8s_resources = []
+
+        # Parse file-level k8s resources (before any container headings)
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("- **k8s resources**:"):
+                file_k8s_resources = [r.strip() for r in stripped[20:].split(",")]
+                break
+            if stripped.startswith("###"):
+                break
 
         # Optimized state machine to parse the markdown efficiently
         # Track iterations only for the outer loop, not inner parsing loops
@@ -326,6 +340,7 @@ class MarkdownSimilarityAnalyzer:
                     test_steps=test_steps,
                     test_prep_steps=test_prep,
                     test_cleanup_steps=test_cleanup,
+                    k8s_resources=file_k8s_resources.copy(),
                 )
                 contexts.append(context)
                 continue  # Don't increment i, already positioned correctly
@@ -335,8 +350,29 @@ class MarkdownSimilarityAnalyzer:
 
         return contexts
 
+    def _compute_common_resources(
+        self, test_contexts: List[TestContext], threshold: float = 0.3
+    ) -> Set[str]:
+        """Find resources that appear in more than threshold fraction of tests.
+        These are too common to be useful for distinguishing tests."""
+        from collections import Counter
+
+        resource_counts: Counter = Counter()
+        for ctx in test_contexts:
+            for r in set(ctx.k8s_resources):
+                resource_counts[r] += 1
+        total = len(test_contexts)
+        common = {r for r, count in resource_counts.items() if count / total > threshold}
+        if common:
+            print(
+                f"Filtering {len(common)} common resources (>{threshold*100:.0f}% frequency): "
+                f"{', '.join(sorted(common))}"
+            )
+        return common
+
     def create_test_documents(self, test_contexts: List[TestContext]) -> List[TestDocument]:
         """Convert TestContext objects to TestDocument objects for FAISS"""
+        self._common_resources = self._compute_common_resources(test_contexts)
         documents = []
 
         for i, context in enumerate(test_contexts):
@@ -491,6 +527,13 @@ class MarkdownSimilarityAnalyzer:
         if all_cleanup:
             cleanup_text = " | ".join(all_cleanup)
             parts.append(f"Cleanup: {cleanup_text}")
+
+        # K8s resources: only rare/distinctive ones included in embeddings
+        if context.k8s_resources:
+            common = getattr(self, "_common_resources", set())
+            distinctive = [r for r in context.k8s_resources if r not in common]
+            if distinctive:
+                parts.append(f"Resources: {', '.join(distinctive)}")
 
         # Labels and test IDs excluded from embeddings (kept in metadata only)
         # - Labels: file-specific organizational tags with no semantic value (see label_recommendation.md)
@@ -652,13 +695,22 @@ class MarkdownSimilarityAnalyzer:
         if ctx1.containers and ctx2.containers:
             common_containers = set(ctx1.containers) & set(ctx2.containers)
             max_containers = max(len(ctx1.containers), len(ctx2.containers))
-            score += 0.3 * (len(common_containers) / max_containers)
+            score += 0.2 * (len(common_containers) / max_containers)
+
+        # K8s resource similarity (only distinctive/rare resources)
+        common_res = getattr(self, "_common_resources", set())
+        r1 = set(ctx1.k8s_resources) - common_res
+        r2 = set(ctx2.k8s_resources) - common_res
+        if r1 and r2:
+            shared = r1 & r2
+            max_resources = max(len(r1), len(r2))
+            score += 0.2 * (len(shared) / max_resources)
 
         # Label similarity
         if ctx1.test_labels and ctx2.test_labels:
             common_labels = set(ctx1.test_labels) & set(ctx2.test_labels)
             max_labels = max(len(ctx1.test_labels), len(ctx2.test_labels))
-            score += 0.2 * (len(common_labels) / max_labels)
+            score += 0.1 * (len(common_labels) / max_labels)
 
         # Step count similarity (structural)
         steps1 = len(ctx1.test_steps)

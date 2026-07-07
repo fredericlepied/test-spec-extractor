@@ -1,9 +1,8 @@
 """JSONL output matching Go extractor PerItRecord format exactly."""
 
 import json
-from typing import Optional
 
-from .types import Container, FileSpec, TestCase
+from .types import Container, FileSpec
 
 
 def write_per_it_jsonl(spec: FileSpec, file_path: str) -> None:
@@ -15,10 +14,10 @@ def write_per_it_jsonl(spec: FileSpec, file_path: str) -> None:
     with open(file_path, "a", encoding="utf-8") as f:
         # Walk and emit
         for container in spec.root.children:
-            _emit_container(container, spec.file_path, f)
+            _emit_container(container, spec.file_path, f, spec.k8s_resources)
 
 
-def _emit_container(container: Container, file_path: str, f):
+def _emit_container(container: Container, file_path: str, f, k8s_resources=None):
     """Emit test cases from container recursively."""
     if container is None:
         return
@@ -28,6 +27,9 @@ def _emit_container(container: Container, file_path: str, f):
             "desc": test_case.description,
             "file_path": file_path,
         }
+
+        if k8s_resources:
+            rec["k8s_resources"] = k8s_resources
 
         if test_case.labels:
             rec["labels"] = test_case.labels
@@ -85,4 +87,4 @@ def _emit_container(container: Container, file_path: str, f):
 
     # Recursively process children
     for child in container.children:
-        _emit_container(child, file_path, f)
+        _emit_container(child, file_path, f, k8s_resources)

@@ -30,8 +30,9 @@ type Container struct {
 }
 
 type FileSpec struct {
-	FilePath string
-	Root     *Container // synthetic root
+	FilePath     string
+	Root         *Container // synthetic root
+	K8sResources []string   // K8s resource types detected from imports (sorted)
 }
 
 // HasTests returns true if any Container in the tree contains at least one TestCase.

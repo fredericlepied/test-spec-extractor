@@ -21,9 +21,6 @@ GO_ROOTS=()
 PY_ROOTS=()
 OUTPUT_DIR="spec-md"
 VERBOSE=false
-EXPAND_FUNCTIONS=true
-EXPORT_EXPANDED=false
-EXPANDED_OUTPUT_DIR=""
 
 # Function to print colored output
 print_status() {
@@ -59,9 +56,6 @@ OPTIONS:
     -p, --py-root PATH      Path to Python test repository (can be used multiple times)
     -o, --output-dir DIR    Output directory for results (default: spec-md)
     -v, --verbose           Verbose output
-    -e, --expand-functions  Expand function calls up to k8s/ocp calls (default: true)
-    -x, --export-expanded   Export expanded code to individual files
-    --expanded-output-dir DIR  Output directory for expanded code files (default: {output-dir}/expanded_code/)
     -h, --help              Show this help message
 
 FEATURES:
@@ -124,18 +118,6 @@ while [[ $# -gt 0 ]]; do
         -v|--verbose)
             VERBOSE=true
             shift
-            ;;
-        -e|--expand-functions)
-            EXPAND_FUNCTIONS=true
-            shift
-            ;;
-        -x|--export-expanded)
-            EXPORT_EXPANDED=true
-            shift
-            ;;
-        --expanded-output-dir)
-            EXPANDED_OUTPUT_DIR="$2"
-            shift 2
             ;;
         -h|--help)
             show_usage
@@ -309,28 +291,14 @@ if [[ ${#PY_ROOTS[@]} -gt 0 ]]; then
         abs_outdir=$(cd "$(dirname "$outdir")" && pwd)/$(basename "$outdir")
         abs_jsonl=$(cd "$(dirname "$PY_PER_IT_JSONL")" && pwd)/$(basename "$PY_PER_IT_JSONL")
         
-        # Build command with expansion flags for Python
-        PY_EXPAND_FLAGS=""
-        if [[ "$EXPAND_FUNCTIONS" == "true" ]]; then
-            PY_EXPAND_FLAGS="--expand-functions"
-        fi
-        if [[ "$EXPORT_EXPANDED" == "true" ]]; then
-            PY_EXPAND_FLAGS="$PY_EXPAND_FLAGS --export-expanded"
-            if [[ -n "$EXPANDED_OUTPUT_DIR" ]]; then
-                PY_EXPAND_FLAGS="$PY_EXPAND_FLAGS --expanded-output-dir $EXPANDED_OUTPUT_DIR"
-            else
-                PY_EXPAND_FLAGS="$PY_EXPAND_FLAGS --expanded-output-dir $abs_outdir/expanded_code"
-            fi
-        fi
-        
         if [[ "$VERBOSE" == "true" ]]; then
-            if ! (cd py-extractor && python3 -m spec_extractor.main --root "$py_root" --out "$abs_outdir" --jsonl "$abs_jsonl" $PY_EXPAND_FLAGS); then
+            if ! (cd py-extractor && python3 -m spec_extractor.main --root "$py_root" --out "$abs_outdir" --jsonl "$abs_jsonl"); then
                 print_warning "  Failed to render markdown for $repo_name"
                 cd ..
                 continue
             fi
         else
-            if ! (cd py-extractor && python3 -m spec_extractor.main --root "$py_root" --out "$abs_outdir" --jsonl "$abs_jsonl" $PY_EXPAND_FLAGS >/dev/null 2>&1); then
+            if ! (cd py-extractor && python3 -m spec_extractor.main --root "$py_root" --out "$abs_outdir" --jsonl "$abs_jsonl" >/dev/null 2>&1); then
                 print_warning "  Failed to render markdown for $repo_name"
                 cd ..
                 continue
@@ -349,6 +317,38 @@ if [[ ${#PY_ROOTS[@]} -gt 0 ]]; then
     
     TOTAL_FILES=$((TOTAL_FILES + PY_TOTAL_FILES))
 fi
+
+# K8s Resource Quality Check
+print_status "K8s resource detection quality check..."
+
+ABS_MARKDOWN_DIR="$PROJECT_ROOT/$MARKDOWN_DIR"
+for go_root in "${GO_ROOTS[@]}"; do
+    repo_name=$(basename "$go_root")
+    total_files=$(find "$ABS_MARKDOWN_DIR/$repo_name" -name "*.md" 2>/dev/null | wc -l)
+    files_with_resources=$(grep -rl "k8s resources" "$ABS_MARKDOWN_DIR/$repo_name" 2>/dev/null | wc -l)
+    if [[ "$total_files" -gt 0 ]]; then
+        pct=$((files_with_resources * 100 / total_files))
+        if [[ "$pct" -lt 50 ]]; then
+            print_warning "  $repo_name (Go): $files_with_resources/$total_files files with k8s resources (${pct}%) - LOW COVERAGE"
+        else
+            print_success "  $repo_name (Go): $files_with_resources/$total_files files with k8s resources (${pct}%)"
+        fi
+    fi
+done
+for py_root in "${PY_ROOTS[@]}"; do
+    repo_name=$(basename "$py_root")
+    total_files=$(find "$ABS_MARKDOWN_DIR/$repo_name" -name "*.md" 2>/dev/null | wc -l)
+    files_with_resources=$(grep -rl "k8s resources" "$ABS_MARKDOWN_DIR/$repo_name" 2>/dev/null | wc -l)
+    if [[ "$total_files" -gt 0 ]]; then
+        pct=$((files_with_resources * 100 / total_files))
+        if [[ "$pct" -lt 50 ]]; then
+            print_warning "  $repo_name (Python): $files_with_resources/$total_files files with k8s resources (${pct}%) - LOW COVERAGE"
+        else
+            print_success "  $repo_name (Python): $files_with_resources/$total_files files with k8s resources (${pct}%)"
+        fi
+    fi
+done
+echo
 
 # Step 3: Markdown-Aware Similarity Analysis
 print_status "Step 3: Running markdown-aware similarity analysis..."
