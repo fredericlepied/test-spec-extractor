@@ -18,7 +18,7 @@
 **CRITICAL: Keep README.md SHORT and FOCUSED**
 
 - **Target length**: 250-300 lines maximum
-- **Current length**: 274 lines (monitor to prevent bloat)
+- **Current length**: 174 lines (monitor to prevent bloat)
 - **Principle**: Users want to get started quickly, not read a manual
 
 **What to INCLUDE:**
@@ -878,3 +878,86 @@ Resource names are normalized to match Go conventions for cross-language similar
 ### Quality Metrics
 
 The shell script reports per-repo K8s resource detection coverage after extraction. Files with <50% coverage trigger a `[WARNING]` to flag potential detection gaps.
+
+## Web UI (Test Spec Explorer)
+
+### Overview
+
+Interactive React SPA for browsing test specs, similarity matches, and K8s resource coverage. Located in `web/`. The built output (`web/dist/`) is a self-contained static site — serve with any HTTP server.
+
+### Tech Stack
+
+- **React 19 + TypeScript + Vite 8** — SPA with HashRouter for static deployment
+- **Tailwind CSS v4** — styling with dark/light theme via `darkMode: 'class'`
+- **Recharts** — dashboard charts (bar charts, treemap)
+- **react-router-dom v7** — client-side routing with HashRouter
+
+### Architecture
+
+```
+web/
+  scripts/prepare-data.py    # JSONL/CSV → JSON conversion (Python)
+  public/data/               # Generated JSON bundles (gitignored)
+    tests.json               # ~5,000 test records with source URLs
+    similarity.json          # ~6,000 match pairs with embedded test details
+    stats.json               # Pre-computed dashboard aggregates
+  src/
+    hooks/                   # useData (fetch+cache), useSearch (debounced), useTheme
+    components/
+      layout/                # AppShell, Sidebar, ThemeToggle
+      dashboard/             # StatCard, RepoBarChart, ScoreHistogram, K8sResourceChart
+      similarity/            # SimilarityExplorer, SimilarityTable, SimilarityDetail, ScoreBadge
+      catalog/               # TestCatalog, TestTable, TestDetail, TestFilters
+```
+
+### Data Pipeline
+
+`web/scripts/prepare-data.py` converts upstream data into web-ready JSON:
+
+1. **Source URL extraction**: Parses `spec-md/markdown/*.md` files for `- source: [file:line](URL)` patterns. Falls back to constructing URLs from git repo info for files without markdown source links (Python tests).
+2. **tests.json**: From `all_specs_per_it.jsonl` — adds `repo`, `sourceUrl`, `polarionUrl` fields.
+3. **similarity.json**: From `markdown_similarity_results.json` (preferred) or `.csv` (fallback). Parses repr'd Python lists from CSV. Resolves source URLs via description-based lookup.
+4. **stats.json**: Pre-computed counts, score distribution, K8s resource frequency (common resources >30% filtered).
+
+The script runs automatically as part of `npm run build` and `npm run dev`, and is also called by `extract-spec-md.sh`.
+
+### Key Design Decisions
+
+- **HashRouter over BrowserRouter**: Enables serving from any static server without rewrite rules. URLs use `#/similarity` format.
+- **Static JSON bundles over API**: Data loaded via `fetch()` with module-level caching. Each view loads only its needed file.
+- **Common K8s resource filtering**: Resources appearing in >30% of tests (Pod, Node, Namespace, etc.) are filtered from the dashboard treemap and stats, matching the similarity embedding layer behavior.
+- **Cross-reference for similarity detail**: The similarity detail panel loads `tests.json` and indexes by `{repo}:{description}` to show full test details (steps, validations, prep, cleanup) even when the similarity CSV doesn't embed them.
+- **Tooltip CSS variables**: Chart tooltips use `--color-tooltip-bg/text/border` CSS variables that switch with `.dark` class, since Recharts `contentStyle` doesn't support Tailwind classes.
+
+### URL Query Parameters
+
+Views accept query params for deep linking from the dashboard:
+
+- `/catalog?repo=eco-gotests` — filter catalog to a repo
+- `/catalog?lang=go` — filter by language
+- `/catalog?resource=Route` — filter by K8s resource
+- `/similarity?type=cross` — show cross-language matches only
+- `/similarity?min=0.90` — set minimum similarity threshold
+
+### Adding New Filters
+
+To add a filter to a view:
+1. Add state and URL param reading in the view component (e.g. `TestCatalog.tsx`)
+2. Add the filter control in the filters component (e.g. `TestFilters.tsx`)
+3. Add the `.filter()` call in the `preFiltered` / `filtered` useMemo
+4. Wire up the navigation target in the dashboard (StatCard `to` prop or chart `onClick`)
+
+### Build and Deployment
+
+```bash
+cd web
+npm install          # First time only
+npm run build        # Generates data + builds to dist/
+npm run dev          # Dev server with hot reload
+
+# Ship dist/ directory
+cd dist
+python3 -m http.server 8080
+```
+
+`dist/` includes a `README.md` with usage instructions.

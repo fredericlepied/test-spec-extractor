@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --color-tooltip-bg: #ffffff;
+  --color-tooltip-text: #1f2937;
+  --color-tooltip-border: #e5e7eb;
+}
+
+.dark {
+  --color-tooltip-bg: #1f2937;
+  --color-tooltip-text: #f3f4f6;
+  --color-tooltip-border: #374151;
+}
+
+body {
+  margin: 0;
+}
+
+#root {
+  min-height: 100vh;
+}

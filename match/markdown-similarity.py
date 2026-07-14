@@ -42,6 +42,7 @@ class TestContext:
     line_number: int  # Source file line number - excluded from embeddings, for GitHub links
     test_labels: List[str]
     test_steps: List[str]
+    test_validations: List[str]
     test_prep_steps: List[str]  # Test-specific prep
     test_cleanup_steps: List[str]  # Test-specific cleanup
     k8s_resources: List[str]  # K8s resource types (Pod, Deployment, etc.)
@@ -107,6 +108,7 @@ class MarkdownSimilarityAnalyzer:
             ),  # Line number from source file, excluded from embeddings
             test_labels=spec.get("labels", []),
             test_steps=spec.get("steps", []),
+            test_validations=spec.get("validations", []),
             test_prep_steps=[],  # Will be separated from prep_steps
             test_cleanup_steps=[],
             k8s_resources=spec.get("k8s_resources", []),
@@ -338,6 +340,7 @@ class MarkdownSimilarityAnalyzer:
                     line_number=source_line_number,
                     test_labels=test_labels,
                     test_steps=test_steps,
+                    test_validations=[],
                     test_prep_steps=test_prep,
                     test_cleanup_steps=test_cleanup,
                     k8s_resources=file_k8s_resources.copy(),
@@ -676,6 +679,12 @@ class MarkdownSimilarityAnalyzer:
                         set(query_doc.context.test_labels) & set(matched_doc.context.test_labels)
                     ),
                     "is_cross_language": is_cross,
+                    "query_steps": query_doc.context.test_steps,
+                    "query_validations": query_doc.context.test_validations,
+                    "query_k8s_resources": query_doc.context.k8s_resources,
+                    "matched_steps": matched_doc.context.test_steps,
+                    "matched_validations": matched_doc.context.test_validations,
+                    "matched_k8s_resources": matched_doc.context.k8s_resources,
                 }
                 results.append(result)
 
@@ -765,6 +774,10 @@ def main():
         dest="exclude_same_file",
         help="Include matches within the same file",
     )
+    parser.add_argument(
+        "--output-json",
+        help="Also write results as JSON (with embedded test details for web UI)",
+    )
 
     args = parser.parse_args()
 
@@ -837,20 +850,23 @@ def main():
     # Save results
     print(f"Found {len(similarities)} similar test pairs")
     if similarities:
-        df = pd.DataFrame(similarities)
-
         # Normalize file paths if repo roots are provided
         if args.repo_roots:
             print(f"Normalizing file paths using repo roots: {args.repo_roots}")
-            df["query_file"] = df["query_file"].apply(
-                lambda x: normalize_file_path(x, args.repo_roots)
-            )
-            df["matched_file"] = df["matched_file"].apply(
-                lambda x: normalize_file_path(x, args.repo_roots)
-            )
+            for r in similarities:
+                r["query_file"] = normalize_file_path(r["query_file"], args.repo_roots)
+                r["matched_file"] = normalize_file_path(r["matched_file"], args.repo_roots)
 
+        # CSV output (backwards compatible — list columns become repr strings)
+        df = pd.DataFrame(similarities)
         df.to_csv(args.output, index=False)
         print(f"Results saved to {args.output}")
+
+        # JSON output (web UI — preserves native lists, embedded test details)
+        if args.output_json:
+            with open(args.output_json, "w", encoding="utf-8") as jf:
+                json.dump(similarities, jf, ensure_ascii=False)
+            print(f"JSON results saved to {args.output_json}")
 
         # Print summary
         high_similarity = df[df["semantic_similarity"] > 0.9]

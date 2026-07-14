@@ -294,18 +294,14 @@ if [[ ${#PY_ROOTS[@]} -gt 0 ]]; then
         if [[ "$VERBOSE" == "true" ]]; then
             if ! (cd py-extractor && python3 -m spec_extractor.main --root "$py_root" --out "$abs_outdir" --jsonl "$abs_jsonl"); then
                 print_warning "  Failed to render markdown for $repo_name"
-                cd ..
                 continue
             fi
         else
             if ! (cd py-extractor && python3 -m spec_extractor.main --root "$py_root" --out "$abs_outdir" --jsonl "$abs_jsonl" >/dev/null 2>&1); then
                 print_warning "  Failed to render markdown for $repo_name"
-                cd ..
                 continue
             fi
         fi
-        
-        cd ..
         
         # Count generated files (use absolute path since we're back in project root)
         if [[ -d "$abs_outdir" ]]; then
@@ -432,6 +428,7 @@ if [[ -n "$COMBINED_JSONL" && -f "$COMBINED_JSONL" && -s "$COMBINED_JSONL" ]]; t
                     --jsonl "$COMBINED_JSONL" \
                     --markdown "$MARKDOWN_DIR/" \
                     --output "$OUTPUT_DIR/markdown_similarity_results.csv" \
+                    --output-json "$OUTPUT_DIR/markdown_similarity_results.json" \
                     --repo-roots "${ALL_REPO_ROOTS[@]}" \
                     --threshold 0.75 \
                     --top-k 10 \
@@ -642,6 +639,18 @@ EOF
     fi
 else
     print_warning "No per-It specs generated, skipping similarity analysis"
+fi
+
+# Step 4 (optional): Prepare web UI data
+if [[ -d "$PROJECT_ROOT/web" && -f "$PROJECT_ROOT/web/scripts/prepare-data.py" ]]; then
+    print_status "Preparing web UI data..."
+    if python "$PROJECT_ROOT/web/scripts/prepare-data.py" \
+        --input "$ABS_OUTPUT_DIR" \
+        --output "$PROJECT_ROOT/web/public/data"; then
+        print_success "Web UI data prepared in web/public/data/"
+    else
+        print_warning "Web UI data preparation failed (non-critical)"
+    fi
 fi
 
 # Final output

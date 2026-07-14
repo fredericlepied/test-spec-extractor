@@ -2,3 +2,7 @@ results
 spec-md
 __pycache__
 .claude
+web/node_modules
+web/dist
+web/public/data
+web/*.tar.gz

@@ -1,8 +1,25 @@
 """JSONL output matching Go extractor PerItRecord format exactly."""
 
 import json
+from pathlib import Path, PurePosixPath
 
 from .types import Container, FileSpec
+
+
+def _extract_repo_name(file_path: str) -> str:
+    """Extract repository name from absolute file path.
+
+    Looks for a path segment after 'external/' (e.g. /home/user/external/eco-pytests/... → 'eco-pytests').
+    Falls back to the git repo root directory name.
+    """
+    parts = PurePosixPath(file_path).parts
+    for i, p in enumerate(parts):
+        if p == "external" and i + 1 < len(parts):
+            return parts[i + 1]
+    for parent in Path(file_path).parents:
+        if (parent / ".git").exists():
+            return parent.name
+    return ""
 
 
 def write_per_it_jsonl(spec: FileSpec, file_path: str) -> None:
@@ -27,6 +44,9 @@ def _emit_container(container: Container, file_path: str, f, k8s_resources=None)
             "desc": test_case.description,
             "file_path": file_path,
         }
+        repo = _extract_repo_name(file_path)
+        if repo:
+            rec["repo"] = repo
 
         if k8s_resources:
             rec["k8s_resources"] = k8s_resources
