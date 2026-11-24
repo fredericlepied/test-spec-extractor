@@ -100,18 +100,30 @@ SIMILARITY ANALYSIS:
 EOF
 }
 
+require_path() {
+    case ${2-} in
+        ''|-g|--go-root|-p|--py-root|-o|--output-dir|-v|--verbose|-h|--help)
+            print_error "Missing path for $1" >&2
+            exit 1
+            ;;
+    esac
+}
+
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         -g|--go-root)
+            require_path "$@"
             GO_ROOTS+=("$2")
             shift 2
             ;;
         -p|--py-root)
+            require_path "$@"
             PY_ROOTS+=("$2")
             shift 2
             ;;
         -o|--output-dir)
+            require_path "$@"
             OUTPUT_DIR="$2"
             shift 2
             ;;
