@@ -34,6 +34,15 @@ agents:
 allowed_remote_resources:
     - https://raw.githubusercontent.com/fullsend-ai/fullsend/
     - https://raw.githubusercontent.com/fullsend-ai/agents/
+authorization:
+    - provider: jira
+      write:
+        accounts:
+            - 70121:c85f621c-2c0a-47a3-90d1-90ad97dcaf63
+      triage:
+        accounts:
+            - 70121:c85f621c-2c0a-47a3-90d1-90ad97dcaf63
+      labels: allowlist
 artifacts:
     content: none
 progress:
