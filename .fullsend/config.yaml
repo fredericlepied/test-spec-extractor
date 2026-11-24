@@ -47,4 +47,4 @@ authorization:
 artifacts:
     content: none
 progress:
-    verbosity: quiet
+    verbosity: full
