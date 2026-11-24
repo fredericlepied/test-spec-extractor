@@ -5,11 +5,12 @@
 # See https://fullsend.sh/docs/guides/infrastructure/layered-config-reference
 version: "1"
 tracker:
-    github:
-        allowed_targets:
-            repos:
-                - fullsend-ai/fullsend
-                - fullsend-ai/agents
+    jira:
+      base_url: https://redhat.atlassian.net
+      project: CILAB
+      poll:
+        enabled: true
+        query: 'labels = "fullsend" ORDER BY updated DESC'
 runtime: codex
 roles:
     - triage
@@ -36,3 +37,10 @@ agents:
 allowed_remote_resources:
     - https://raw.githubusercontent.com/fullsend-ai/fullsend/
     - https://raw.githubusercontent.com/fullsend-ai/agents/
+
+# Limit published run data, including GitHub follow-up runs.
+# These settings do not redact PRs, comments, commits, or all script output.
+artifacts:
+    content: none
+progress:
+    verbosity: quiet
