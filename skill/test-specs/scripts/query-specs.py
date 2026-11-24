@@ -363,13 +363,25 @@ def cmd_by_id(args):
 # --- CLI ---
 
 
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Query extracted test specifications",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--data-dir", help="Path to spec-md/ directory (auto-detected by default)")
-    parser.add_argument("--text", action="store_true", help="Output as human-readable text instead of JSON")
+    parser.add_argument(
+        "--text", action="store_true", help="Output as human-readable text instead of JSON"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # search
@@ -378,7 +390,7 @@ def main():
     p.add_argument("--repo", help="Filter by repository name")
     p.add_argument("--lang", choices=["go", "python"], help="Filter by language")
     p.add_argument("--resource", help="Filter by K8s resource")
-    p.add_argument("--limit", type=int, default=20, help="Max results (default: 20)")
+    p.add_argument("--limit", type=_positive_int, default=20, help="Max results (default: 20)")
 
     # details
     p = sub.add_parser("details", help="Show full test details")
@@ -391,7 +403,7 @@ def main():
     p.add_argument("description", help="Test description to search for")
     p.add_argument("--min-score", type=float, default=0.75, help="Min similarity (default: 0.75)")
     p.add_argument("--cross-only", action="store_true", help="Cross-language matches only")
-    p.add_argument("--limit", type=int, default=20, help="Max results (default: 20)")
+    p.add_argument("--limit", type=_positive_int, default=20, help="Max results (default: 20)")
 
     # stats
     p = sub.add_parser("stats", help="Show summary statistics")
@@ -405,7 +417,7 @@ def main():
     p = sub.add_parser("by-resource", help="Find tests by K8s resource")
     p.add_argument("name", help="K8s resource name (e.g., Pod, SR-IOV, Route)")
     p.add_argument("--repo", help="Filter by repository name")
-    p.add_argument("--limit", type=int, default=20, help="Max results (default: 20)")
+    p.add_argument("--limit", type=_positive_int, default=20, help="Max results (default: 20)")
 
     # by-id
     p = sub.add_parser("by-id", help="Lookup test by Polarion ID")
