@@ -20,6 +20,7 @@ agents:
       model: openai/gpt-6.2-sol
       effort: low
     - name: code
+      source: https://raw.githubusercontent.com/fullsend-ai/agents/v0.57.0/harness/code.yaml#sha256=f6fe03354a78f6e903d5186c8a7a348b5d0d5487cc48bb9633f7d583715ed6db
       runtime: codex
       model: openai/gpt-6.2-sol
       effort: low
